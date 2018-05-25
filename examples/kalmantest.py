@@ -1,4 +1,7 @@
-import kalman as kal
+import os,sys
+sys.path.append(os.path.dirname(os.path.realpath("")))
+
+from kalman import *
 import numpy as np
 from matplotlib import pyplot as plt
 from filterpy.common import Q_discrete_white_noise
@@ -15,7 +18,7 @@ def F(dt):
 			[0,0,0,0],
 			[0,0,0,0]]
 
-kf = kal.Kalman(F='pv',dt=dt,H=0,Q=1,R=0.2,numsensors=1)
+kf = Kalman(F='pv',dt=dt,H=0,Q=1,R=0.2,numsensors=1)
 output = []
 for i in range(x.size):
 	output.append(kf.predict(ynoisey[i])[0])
