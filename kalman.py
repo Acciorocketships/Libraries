@@ -8,8 +8,14 @@ from filterpy.common import Q_discrete_white_noise
 
 class Kalman:
 
-	def __init__(self,F='pv',H=None,dt=0,numsensors=1,Q=None,R=None,P=None,B=None,**kwargs):
+	def __init__(self,F='pv',H=None,dt=0,Q=None,R=None,P=None,B=None,**kwargs):
 		# Filter
+		numsensors = 1
+		if type(H) == tuple:
+			numsensors = len(H)
+		elif type(H) == np.ndarray or type(H) == list:
+			# TODO!!! Fix this line. Try to find numsensors from H array
+			numsensors = sum(sum(np.array(H),1)!=0,1)
 		Fstates = F
 		if type(F) == type(lambda x: 0):
 			try:
@@ -21,7 +27,7 @@ class Kalman:
 		elif type(Fstates) == np.ndarray:
 			self.states = Fstates.shape[0]
 		elif type(Fstates) == str:
-			self.states = len(Fstates) * numsensors
+			self.states = len(Fstates)
 		self.filter = KalmanFilter(dim_x=self.states,dim_z=numsensors)
 		self.time = 0
 		# P Covariance Initialization (changes over time), size:(states,states)
@@ -65,12 +71,12 @@ class Kalman:
 			self.filter.Q = np.array(Q)
 		else:
 			if (type(Q)==int) or (type(Q)==float):
-				self.Qmag = Q
+				Qmag = Q
 			elif type(self.filter.R)==np.ndarray:
-				self.Qmag = np.linalg.norm(self.filter.R)
+				Qmag = np.linalg.norm(self.filter.R)
 			else:
-				self.Qmag = self.filter.R
-			self.calcQ()
+				Qmag = self.filter.R
+			self.filter.Q = Qmag * np.identity(numsensors)
 		# B Control Init (Extra Forces)
 		if (type(B) == list) or (type(B) == np.ndarray):
 			self.filter.B = np.array(B)
@@ -96,9 +102,6 @@ class Kalman:
 			except TypeError:
 				self.filter.F = np.array(self.F())
 
-	def calcQ(self):
-		if self.Qmag is not None:
-			self.filter.Q = Q_discrete_white_noise(self.states, self.dt, self.Qmag)
 
 	# xex: x expected, xme: m measured, xf: x filtered, P: covariance, H: measurement, F: prediction matrix K: kalman constant
 	# xex = (F * xf) + (B * u)
@@ -111,7 +114,6 @@ class Kalman:
 		if self.autotime:
 			self.calcDt()
 			self.calcF()
-			self.calcQ()
 		if x is not None:
 			x = np.array([x])
 			x = x.reshape((x.size,1))
