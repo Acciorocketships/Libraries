@@ -16,8 +16,10 @@ class Stream:
  
       if ('pic' in mode) or ('img' in mode) or ('image' in mode): 
         self.mode = 'pic' 
-      elif ('vid' in mode): 
-        self.mode = 'vid' 
+      elif ('vid' in mode) or ('movie' in mode): 
+        self.mode = 'vid'
+      elif ('pi' in mode):
+        self.mode = 'pi'
       else: 
         self.mode = 'cam' 
  
@@ -35,12 +37,18 @@ class Stream:
           self.stream = cv2.VideoCapture(src) 
       elif self.mode == 'cam': 
         self.stream = cv2.VideoCapture(0) 
+      elif self.mode == 'pi':
+        import picamera
+        self.stream = picamera.PiCamera()
  
  
     # 'Private' Functions 
  
     def __iter__(self): 
       return self 
+
+    def next(self):
+      return self.__next__()
  
     def __next__(self): 
       img = self.get() 
@@ -62,6 +70,7 @@ class Stream:
             return self.files[self.filenum] 
         elif self.mode == 'pic': 
           if self.files[self.filenum].endswith('.jpg') or \
+             self.files[self.filenum].endswith('.JPG') or \
              self.files[self.filenum].endswith('.png') or \
              self.files[self.filenum].endswith('.bmp'): 
             return self.files[self.filenum] 
@@ -99,6 +108,14 @@ class Stream:
         return np.array(image) 
       else: 
         return None 
+
+    def pi(self):
+      try:
+        image = picamera.array.PiRGBArray(self.stream)
+        self.stream.capture(image, 'rgb')
+        return np.array(image)
+      except:
+        return None
  
  
     # Public Functions 
@@ -111,6 +128,8 @@ class Stream:
         image = self.vid() 
       elif self.mode == 'cam': 
         image = self.cam() 
+      elif self.mode == 'pi':
+        image = self.pi()
       if image.dtype is np.dtype('object'): 
         return None 
       return image 
@@ -202,11 +221,12 @@ class Stream:
       if len(X.shape) == 1: p = p.flatten() # flatten if X was 1D
       return p
  
-    # type(mark)== 2-tuple or 2-tuple: (x,y) draws points 
-    # type(mark)== 3-tuple or 3-tuple: (x,y,radius) draws circles 
-    # type(mark)== 4-tuple or 4-tuple: (x,y,length,height) draws rectangles 
-    # type(mark)== string: 'text' places text in corner 
-    # type(mark)== (int,int,string): (x,y,'text') places text at position 
+    # type(mark) == 2-tuple: (x,y) draws points 
+    # type(mark) == 2-tuple of 2-tuples: ((x1,y1), (x2,y2)) draws lines
+    # type(mark) == 3-tuple: (x,y,radius) draws circles 
+    # type(mark) == 4-tuple: (x,y,length,height) draws rectangles 
+    # type(mark) == string: 'text' places text in corner 
+    # type(mark) == (int,int,string): (x,y,'text') places text at position 
     # if xyaxis=True then it will draw in xy coordinates, not image coordinates 
     # copy=False: updates original. copy=True: does not edit original, returns new img
     @staticmethod
@@ -231,11 +251,16 @@ class Stream:
             else: 
               pos = (int(mark[0]),int(mark[1])) 
           cv2.putText(image,mark[2],pos,cv2.FONT_HERSHEY_COMPLEX_SMALL,size,color,size) 
-        elif len(mark) == 2: 
+        elif (len(mark) == 2) and (isinstance(mark[0], tuple) or isinstance(mark[0], list)):
+          mark = (tuple(mark[0]), tuple(mark[1]))
+          if xyaxis: 
+            mark = ((mark[0][0], image.shape[0]-mark[0][1]), (mark[1][0], image.shape[0]-mark[1][1]))
+          cv2.line(image,mark[0],mark[1],color,size)
+        elif len(mark) == 2:
           if xyaxis: 
             mark = (mark[0],image.shape[0]-mark[1]) 
           cv2.circle(image,(int(mark[0]),int(mark[1])),1,color,size) 
-        elif len(mark) == 3: 
+        elif len(mark) == 3:
           if xyaxis: 
             mark = (mark[0],image.shape[0]-mark[1],mark[2]) 
           cv2.circle(image,(int(mark[0]),int(mark[1])),int(mark[2]),color,size) 
