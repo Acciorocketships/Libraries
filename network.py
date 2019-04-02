@@ -1,29 +1,26 @@
 import os,sys
 sys.path.append(os.path.dirname(os.path.realpath("")))
-
 import socket
-import select
 import pickle
 import threading
 import time
-import sys
 
 class Network:
 
-	def __init__(self,host='localhost',portin=8000,portout=8080):
-		self.s = None
-		self.r = None
-		self.host = host
-		if host == 'localhost':
-			self.host = socket.gethostname()
-		self.portin = portin
-		self.portout = portout
-		self.data = {}
-		self.receiver = False
-		self.sender = False
-		self.callbacks = {}
-		self.connections = {}
-		self.listener = None
+	def __init__(self,port=8080,host=None,otherport=None,otherhost=None):
+		self.s = None # Socket Sender
+		self.r = None # Socket Listener
+		self.host = host if (host is not None) else socket.gethostname() # The host of this node
+		self.otherhost = otherhost if (otherhost is not None) else self.host # The host that this node sends data to
+		self.port = port # The port that this node binds to
+		self.otherport = otherport # The port that this node sends data to
+		self.data = {} # Data that has been recieved, lookup by name of variable
+		self.initreceiver = False # Internal Flag
+		self.initsender = False # Internal Flag
+		self.callbacks = {} # Functions called with the variable as an input whenever new data arrives
+		self.connections = {} # Lookup of connections by address
+		self.listener = None # Listening Thread
+		self.run()
 
 	# Listens to a specific connection, updates the variable, calls the callback, and exits when done
 	def clientThread(self,connection,address):
@@ -52,19 +49,19 @@ class Network:
 
 	# Closes the send socket
 	def close(self):
-		if self.sender:
-			self.s.close()
-			self.sender = False
-		if self.receiver:
-			self.r.close()
-			self.receiver = False
+		try:
+			if self.initsender:
+				self.s.close()
+				self.initsender = False
+			if self.initreceiver:
+				self.r.close()
+				self.initreceiver = False
+		except:
+			pass
 
-	# Gets the latest updated version of variable
-	def get(self,name):
-		return self.data.get(name, None)
-
+	# Listening thread called by run()
 	def listen(self):
-		while self.receiver:
+		while self.initreceiver:
 			try:
 				connection, address = self.r.accept()
 			except ConnectionAbortedError:
@@ -81,30 +78,49 @@ class Network:
 	def run(self,callbacks={}):
 		# Initialization
 		self.callbacks = callbacks
-		if not self.receiver:
+		if not self.initreceiver:
 			self.r = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 			for i in range(100):
 				try:
-					self.r.bind((self.host, self.portin))
+					self.r.bind((self.host, self.port))
 					break
 				except:
-					print('Trying to connect to ' + str(self.host) + " : " + str(self.portin))
+					print('Trying to connect to ' + str(self.host) + " : " + str(self.port))
 					time.sleep(1)
 			self.r.listen(5)
-			self.receiver = True
+			self.initreceiver = True
 		# Spin off new listener threads for each new connection
 		self.listener = threading.Thread(target=self.listen)
 		self.listener.start()
 
 	# Sends a message
-	def send(self,var,name='var'):
+	def send(self,var,name='var',host=None,port=None):
 		# Initialization
-		if not self.sender:
+		if (host is not None and host != self.otherhost) or (port is not None and port != self.otherport) or (not self.initsender):
+			if host is not None:
+				self.otherhost = host
+			if port is not None:
+				self.portout = port
 			self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			self.s.connect((self.host, self.portout))
-			self.sender = True
+			self.s.connect((self.otherhost, self.otherport))
+			self.initsender = True
 		# Set up data to send
 		databits = pickle.dumps(var)
 		msg = name.encode()  + b'|~|' + databits + b'|!|'
 		self.s.send(msg)
 		# TODO: handshake verification
+
+	# Gets the latest updated version of variable
+	def get(self,name='var'):
+		return self.data.get(name, None)
+
+
+
+
+if __name__ == '__main__':
+	import code
+	n1 = Network(port=8000,otherport=8080)
+	n2 = Network(port=8080,otherport=8000)
+	code.interact(local=locals())
+
+
