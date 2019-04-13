@@ -24,20 +24,23 @@ class Network:
 		self.connections = {} # Lookup of connections by address
 		self.listener = None # Listening Thread
 		self.delim = b'|!endmsg!|'
-		self.openPort(port)
+		self.openPort(self.port)
 		self.run()
 
 
 	# Initiates port forwarding for a port (int) or list of ports, allowing incoming connections
 	def openPort(self,ports):
-		if type(port) == int:
-			port = [port]
+		if type(ports) == int:
+			ports = [ports]
 		upnp = miniupnpc.UPnP()
 		upnp.discoverdelay = 10
 		upnp.discover()
 		upnp.selectigd()
 		for port in ports:
-			upnp.addportmapping(port, 'TCP', upnp.lanaddr, port, 'p2p', '')
+			try:
+				upnp.addportmapping(port, 'TCP', upnp.lanaddr, port, 'p2p', '')
+			except Exception as err:
+				print(err)
 
 
 	# Listens to a specific connection, updates the variable, calls the callback, and exits when done
@@ -156,8 +159,8 @@ class Network:
 
 if __name__ == '__main__':
 	import code
-	n1 = Network(port=8001,otherport=8000)
-	n2 = Network(port=8000,otherport=8001)
+	n1 = Network(port=9001,otherport=9000)
+	n2 = Network(port=9000,otherport=9001)
 	code.interact(local=locals())
 
 
