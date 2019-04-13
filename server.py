@@ -5,7 +5,7 @@ from datetime import datetime
 class Server:
 
 	def __init__(self):
-		self.node = Network(host=None, port=8080, otherport=8080)
+		self.node = Network(host=None, port=8888, otherport=8888)
 		self.node.connectCallback = self.newConnection
 		self.connections = set()
 		self.running = False

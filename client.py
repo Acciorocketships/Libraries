@@ -2,7 +2,7 @@ if __name__ == '__main__':
 
 	from network import *
 
-	n = Network(port=8081, otherport=8080)
+	n = Network(port=8888, otherport=8888)
 
 	n.send('connecting')
 
