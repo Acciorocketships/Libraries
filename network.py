@@ -32,15 +32,15 @@ class Network:
 	def openPort(self,ports):
 		if type(ports) == int:
 			ports = [ports]
-		upnp = miniupnpc.UPnP()
-		upnp.discoverdelay = 10
-		upnp.discover()
-		upnp.selectigd()
-		for port in ports:
-			try:
+		try:
+			upnp = miniupnpc.UPnP()
+			upnp.discoverdelay = 10
+			upnp.discover()
+			upnp.selectigd()
+			for port in ports:
 				upnp.addportmapping(port, 'TCP', upnp.lanaddr, port, 'p2p', '')
-			except Exception as err:
-				print(err)
+		except Exception as err:
+			print(err)
 
 
 	# Listens to a specific connection, updates the variable, calls the callback, and exits when done
