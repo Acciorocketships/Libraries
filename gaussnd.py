@@ -20,7 +20,7 @@ class GaussND:
 				self.denN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
 
 
-	def min(self,x0=None,eqcons=[],ieqcons=[]):
+	def min(self,x0=None,eqcons=[],ieqcons=[],maximize=False):
 		# eqcons (equality constrains) is a list of functions such that f(x)=0
 		# ieqcons (inequality constraints) is a list of fucntions such that f(x)>=0
 		# x0 is the starting point, default [0,0,0]
@@ -31,11 +31,16 @@ class GaussND:
 					dim = term.mean.shape[0]
 					break
 			x0 = np.zeros((dim,))
+		f = (lambda x: -self.evaluate(x)) if maximize else self.evaluate
 		if len(eqcons) != 0 or len(ieqcons) != 0:
-			m = fmin_slsqp(self.evaluate,x0,eqcons=eqcons,ieqcons=ieqcons,iprint=0)
+			xopt = fmin_slsqp(f,x0,eqcons=eqcons,ieqcons=ieqcons,iprint=0)
 		else:
-			m = fmin(self.evaluate,x0,iprint=0)
-		return m
+			xopt = fmin(f,x0,disp=False)
+		return xopt
+
+
+	def max(self,x0=None,eqcons=[],ieqcons=[]):
+		return self.min(x0=x0,eqcons=eqcons,ieqcons=ieqcons,maximize=True)
 
 
 	def __mul__(self,other):
@@ -84,8 +89,8 @@ class GaussND:
 		else: # Multiply 2 Gausians
 		# https://math.stackexchange.com/questions/157172/product-of-two-multivariate-gaussians-distributions
 			inv = np.linalg.inv(N0.cov + N1.cov)
-			cov = N0.cov @ inv @ N1.cov
-			mu = (N1.cov @ inv @ N0.mean) + (N0.cov @ inv @ N1.mean)
+			cov = N0.cov.matmul(inv).matmul(N1.cov)
+			mu = (N1.cov.matmul(inv).matmul(N0.mean)) + (N0.cov.matmul(inv).matmul(N1.mean))
 			N = multivariate_normal(mean=mu,cov=cov)
 		return N
 
@@ -107,7 +112,7 @@ class GaussND:
 
 
 	def plot(self,lim=None):
-		from mayavi import mlab
+		# TODO: test 1d and 2d plots. add option to only plot certain dimensions.
 		if lim is None:
 			# Calculate limits
 			mus = np.concatenate(tuple([[N.mean] for N in filter(lambda N: N is not None, self.numN+self.denN)]), axis=0)
@@ -117,6 +122,7 @@ class GaussND:
 			mid = (maxs + mins) / 2
 			lim = [[mid[i]-1.2*s, mid[i]+1.2*s] for i in range(maxs.shape[0])]
 		if len(lim) == 3:
+			from mayavi import mlab
 			# Evaluate
 			xi,yi,zi = np.mgrid[lim[0][0]:lim[0][1]:50j, lim[1][0]:lim[1][1]:50j, lim[2][0]:lim[2][1]:50j]
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
@@ -129,7 +135,33 @@ class GaussND:
 			mlab.pipeline.volume(grid, vmin=minval, vmax=minval + .5*(maxval-minval))
 			mlab.axes()
 			mlab.show()
-		pass
+		elif len(lim) == 2:
+			from matplotlib import cm
+			import matplotlib.pyplot as plt
+			from mpl_toolkits.mplot3d import Axes3D
+			fig = plt.figure()
+			ax = fig.add_axes([0,0,1,1], projection='3d')
+			# Evaluate
+			xi,yi = np.mgrid[lim[0][0]:lim[0][1]:100j, lim[1][0]:lim[1][1]:100j]
+			coords = np.vstack([item.ravel() for item in [xi, yi]])
+			density = self.evaluate(coords).reshape(xi.shape)
+			# Plot surface with matplotlib
+			surf = ax.plot_surface(xi, yi, density, cmap=cm.coolwarm, linewidth=0, antialiased=False, rcount=100, ccount=100)
+			ax.view_init(90, -90)
+			plt.xlabel("$x_1$")
+			plt.ylabel("$x_2$")
+			fig.colorbar(surf, shrink=0.2, aspect=5)
+			plt.show()
+		elif len(lim) == 1:
+			import matplotlib.pyplot as plt
+			fig = plt.figure()
+			# Evaluate
+			xi = np.mgrid[lim[0][0]:lim[0][1]:100j]
+			density = self.evaluate(np.array([xi])).reshape(xi.shape)
+			# Plot surface with matplotlib
+			func = plt.plot(xi, density)
+			plt.xlabel("$x$")
+			plt.show()
 
 
 	def __getitem__(self,x):
@@ -215,7 +247,7 @@ if __name__ == '__main__':
 
 	g3 = (g2 + g1) / g0
 	x = np.array([0,0,0])
-	# g3.plot()
+	#g3.plot()
 
 	import code; code.interact(local=locals())
 

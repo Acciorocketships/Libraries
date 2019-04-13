@@ -1,6 +1,7 @@
 import os,sys
 sys.path.append(os.path.dirname(os.path.realpath("")))
 import socket
+import miniupnpc
 import pickle
 import threading
 import time
@@ -17,29 +18,55 @@ class Network:
 		self.data = {} # Data that has been recieved, lookup by name of variable
 		self.initreceiver = False # Internal Flag
 		self.initsender = False # Internal Flag
-		self.callbacks = {} # Functions called with the variable as an input whenever new data arrives
+		self.threads = []
+		self.dataCallback = {} # {'varname': fucntion} Function called (with the variable as an input) whenever new data arrives.
+		self.connectCallback = None # Function called (with the address as an input) whenever theres a new connection
 		self.connections = {} # Lookup of connections by address
 		self.listener = None # Listening Thread
+		self.delim = b'|!endmsg!|'
+		self.openPort(port)
 		self.run()
+
+
+	# Initiates port forwarding for a port (int) or list of ports, allowing incoming connections
+	def openPort(self,ports):
+		if type(port) == int:
+			port = [port]
+		upnp = miniupnpc.UPnP()
+		upnp.discoverdelay = 10
+		upnp.discover()
+		upnp.selectigd()
+		for port in ports:
+			upnp.addportmapping(port, 'TCP', upnp.lanaddr, port, 'p2p', '')
+
 
 	# Listens to a specific connection, updates the variable, calls the callback, and exits when done
 	def clientThread(self,connection,address):
-		buf = []
+		buf = b''
 		while address in self.connections:
 			try:
-				databits = connection.recv(4096)
-				buf = buf + databits.split(b'|!|')
-				buf = buf[:-1]
-			except socket.timeout:
+				# Receive message
+				buf += connection.recv(4096)
+				# Split the message. Only take messages that end in delimiters
+				s = buf.split(self.delim)
+				i = 0
+				msgs = []
+				# Buffer must end with delimiter, so don't bother checking the last element
+				for i in range(len(s)-1):
+					# It cant be length 0 (['', e1, e2, ...] happens if buf starts with a delimiter)
+					# If it's the second to last element, it must be followed by a delimiter
+					if len(s[i])!=0 and (i<len(s)-2 or len(s[i+1])==0):
+						msgs.append(s[i])
+				# Interpret the message
+				for msg in msgs:
+					name, var = pickle.loads(msg)
+					self.data[name] = var
+					buf = buf[len(msg):]
+					if name in self.dataCallback:
+						self.dataCallback[name](var)
+			except (socket.timeout, OSError, Exception) as err:
 				pass
-			if len(buf) > 0:
-				msg = buf[0].split(b'|~|')
-				buf = buf[1:]
-				name = msg[0].decode()
-				var = pickle.loads(msg[1])
-				self.data[name] = var
-				if name in self.callbacks:
-					self.callbacks[name](var)
+
 
 	# Closes the socket listening to a specific connection
 	def removeConnection(self,address):
@@ -47,8 +74,10 @@ class Network:
 		connection.close()
 		del self.connections[address]
 
-	# Closes the send socket
+
+	# Stops listening. use run() to start listening again.
 	def close(self):
+		# Stop loops and close sockets
 		try:
 			if self.initsender:
 				self.s.close()
@@ -58,26 +87,33 @@ class Network:
 				self.initreceiver = False
 		except:
 			pass
+		# Remove connections
+		for address in list(self.connections.keys()):
+			self.removeConnection(address)
+		# Close threads
+		for thread in self.threads:
+			thread.join()
+		self.listener.join()
 
 	# Listening thread called by run()
 	def listen(self):
 		while self.initreceiver:
 			try:
 				connection, address = self.r.accept()
-			except ConnectionAbortedError:
-				break
-			self.connections[address] = connection
-			connection.settimeout(5.0)
-			newclient = threading.Thread(target=self.clientThread, args=[connection,address])
-			newclient.start()
-		# Close threads
-		for address in list(self.connections.keys()):
-			self.removeConnection(address)
+				address = address[0]
+				self.connections[address] = connection
+				connection.settimeout(5.0)
+				newclient = threading.Thread(target=self.clientThread, args=[connection,address])
+				newclient.start()
+				self.threads.append(newclient)
+				if self.connectCallback is not None:
+					self.connectCallback(address)
+			except (ConnectionAbortedError, OSError):
+				pass
 
 	# Listens for incoming messages and updates self.data
-	def run(self,callbacks={}):
+	def run(self):
 		# Initialization
-		self.callbacks = callbacks
 		if not self.initreceiver:
 			self.r = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 			for i in range(100):
@@ -100,13 +136,13 @@ class Network:
 			if host is not None:
 				self.otherhost = host
 			if port is not None:
-				self.portout = port
+				self.otherport = port
 			self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 			self.s.connect((self.otherhost, self.otherport))
 			self.initsender = True
 		# Set up data to send
-		databits = pickle.dumps(var)
-		msg = name.encode()  + b'|~|' + databits + b'|!|'
+		databits = pickle.dumps((name,var))
+		msg = databits + self.delim
 		self.s.send(msg)
 		# TODO: handshake verification
 
@@ -117,10 +153,11 @@ class Network:
 
 
 
+
 if __name__ == '__main__':
 	import code
-	n1 = Network(port=8000,otherport=8080)
-	n2 = Network(port=8080,otherport=8000)
+	n1 = Network(port=8001,otherport=8000)
+	n2 = Network(port=8000,otherport=8001)
 	code.interact(local=locals())
 
 
