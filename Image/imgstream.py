@@ -24,7 +24,7 @@ class Stream:
         self.mode = 'cam' 
  
       self.src = src 
-      self.isfolder = (not '.' in src) 
+      self.isfolder = (type(src)==str) and (not '.' in src) 
       if self.isfolder and self.mode != 'cam': 
         self.files = [] 
         self.filenum = -1 
@@ -36,7 +36,7 @@ class Stream:
         else: 
           self.stream = cv2.VideoCapture(src) 
       elif self.mode == 'cam': 
-        self.stream = cv2.VideoCapture(0) 
+        self.stream = cv2.VideoCapture(0 if src=="" else int(src)) 
       elif self.mode == 'pi':
         import picamera
         self.stream = picamera.PiCamera()
@@ -249,24 +249,31 @@ class Stream:
             if xyaxis: 
               pos = (int(mark[0]),int(image.shape[0]-mark[1])) 
             else: 
-              pos = (int(mark[0]),int(mark[1])) 
+              pos = (int(mark[1]),int(mark[0])) 
           cv2.putText(image,mark[2],pos,cv2.FONT_HERSHEY_COMPLEX_SMALL,size,color,size) 
         elif (len(mark) == 2) and (isinstance(mark[0], tuple) or isinstance(mark[0], list)):
-          mark = (tuple(mark[0]), tuple(mark[1]))
           if xyaxis: 
             mark = ((mark[0][0], image.shape[0]-mark[0][1]), (mark[1][0], image.shape[0]-mark[1][1]))
+          else:
+            mark = ((mark[0][1], mark[0][0]), (mark[1][1], mark[1][0]))
           cv2.line(image,mark[0],mark[1],color,size)
         elif len(mark) == 2:
           if xyaxis: 
             mark = (mark[0],image.shape[0]-mark[1]) 
+          else:
+            mark = (mark[1],mark[0])
           cv2.circle(image,(int(mark[0]),int(mark[1])),1,color,size) 
         elif len(mark) == 3:
           if xyaxis: 
-            mark = (mark[0],image.shape[0]-mark[1],mark[2]) 
+            mark = (mark[0],image.shape[0]-mark[1],mark[2])
+          else:
+            mark = (mark[1],mark[0],mark[2])
           cv2.circle(image,(int(mark[0]),int(mark[1])),int(mark[2]),color,size) 
         elif len(mark) == 4: 
           if xyaxis: 
-            mark = (mark[0],image.shape[0]-mark[1],mark[2],mark[3]) 
+            mark = (mark[0],image.shape[0]-mark[1],mark[2],mark[3])
+          else: 
+            mark = (mark[1],mark[0],mark[2],mark[3]) 
           cv2.rectangle(image,(int(mark[0]-mark[2]/2),int(mark[1]-mark[3]/2)), 
                       (int(mark[0]+mark[2]/2),int(mark[1]+mark[3]/2)),color,size) 
       return image 
@@ -287,7 +294,7 @@ from random import random
 if __name__ == '__main__': 
   stream = Stream(mode='webcam') 
   for img in stream: 
-    img = stream.mark(img,['Testing'],size=2) 
-    stream.show(img,'Output',pause=False,resize=True)
+    img = Stream.mark(img,['Testing'],size=2) 
+    Stream.show(img,'Output',pause=False,shape=(720,1280))
 
     

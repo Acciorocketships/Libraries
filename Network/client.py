@@ -1,8 +1,9 @@
+
+from network import *
+
 if __name__ == '__main__':
 
-	from network import *
-
-	n = Network(port=8888, otherport=8888)
+	n = Network(port=8888, otherport=8888, otherhost='168.235.109.146')
 
 	n.send('connecting')
 

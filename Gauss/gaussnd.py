@@ -31,6 +31,8 @@ class GaussND:
 					dim = term.mean.shape[0]
 					break
 			x0 = np.zeros((dim,))
+		# TODO: If there is only one gaussian, return mu
+		# TODO: If there are zero gaussians, return x0
 		f = (lambda x: -self.evaluate(x)) if maximize else self.evaluate
 		if len(eqcons) != 0 or len(ieqcons) != 0:
 			xopt = fmin_slsqp(f,x0,eqcons=eqcons,ieqcons=ieqcons,iprint=0)

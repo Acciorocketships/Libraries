@@ -1,0 +1,15 @@
+iSight Intrinsics
+
+For x up, y right, z in, where [x y 1] = K * [X Y Z]
+
+Camera Intrinsic Matrix:
+K = [ 981.7    0     335.7 ;
+        0    1043.7  636.4 ;
+	0      0       1   ]
+
+Image Center:
+Vertical: 335.7282 from bottom
+Horizontal: 636.4234 from left
+
+Radial Distortion:
+[ 0.0977  0.0012 ]
