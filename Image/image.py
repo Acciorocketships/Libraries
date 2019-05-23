@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from vp_detection import *
 
 
 def undistort(img, K, d, returnK=False):
@@ -159,6 +160,37 @@ def pixToWorldDist(pos1, pos2, dist, K, plane=np.array([0, 0, 1]), R=np.eye(3), 
         return (pWorld1, pWorld2, D)
     else:
         return (pWorld1, pWorld2)
+
+
+def vanishingPoints(img, K, lengthThres=30, pixelCoords=False):
+	# Finds the vanishing points and returns them in the order (vertical, right, in)
+	# Each column of the result is a vanishing point in the form [x; y; z] where x is up, y is right, z is in
+	# If pixelCoords is False, the VPs are on the unit circle. The 3x3 result is a rotation matrix
+	# If pixelCoords is True, the 2x3 result is the three VPs in the form [u; v] where u is down and v is right
+
+	principalPoint = [K[1,2], img.shape[0]-K[0,2]] # convert to [u', v'] = [v, h-u]
+	focalLength = K[1,1]
+
+	vpd = vp_detection(lengthThres, principalPoint, focalLength, seed=0)
+
+	# Vanishing points as unit vectors in image coordinates (x up, y right, z in)
+	# first col is the vertical vp, second col is the right vp, third col is the inward vp
+	vp = np.array(vpd.find_vps(img))
+	vp = np.concatenate((vp[:,0], vp[:,1], vp[:,2]), axis=1) # [x, y, z] = [y', x', z']
+	vp = np.concatenate((vp[2,:], vp[1,:], vp[0,:]), axis=0) # put in correct order
+	vp = vp.T # flip so each vp is a column instead of a row
+
+	if pixelCoords:
+		vpp = np.array(vpd.vps_2D)
+		vpp = np.concatenate((img.shape[0]-vpp[:,0], vpp[:,1]), axis=1) # [u, v] = [h-v', u']
+		vpp = np.concatenate((vpp[2,:], vpp[1,:], vpp[0,:]), axis=0)  # put in correct order
+		vpp = vpp.T
+		return vpp
+	else:
+		return vp
+
+
+
 
 
 
