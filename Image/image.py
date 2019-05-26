@@ -15,17 +15,19 @@ def undistort(img, K, d, returnK=False):
 	# opencv uses horizontal as first coordinate and vertical as second, so change K and size accordingly
 	size = (img.shape[1], img.shape[0])
 	K = swapK(K)
+	K[1,2] = img.shape[0] - K[1,2]
 
 	# Calculates the camera matrix where all points in the region are defined after undistortion
-	Kopt, _ = cv2.getOptimalNewCameraMatrix(K, d, imageSize=(img.shape[1], img.shape[0]), alpha=0, centerPrincipalPoint=False)
+	Kopt, _ = cv2.getOptimalNewCameraMatrix(K, d, imageSize=size, alpha=0, centerPrincipalPoint=False)
 
 	# Undistort and apply change camera matrix to Kopt
-	mapx, mapy = cv2.initUndistortRectifyMap(K, d, R=None, newCameraMatrix=Kopt, size=(img.shape[1], img.shape[0]), m1type=cv2.CV_16SC2)
+	mapx, mapy = cv2.initUndistortRectifyMap(K, d, R=None, newCameraMatrix=Kopt, size=size, m1type=cv2.CV_16SC2)
 	imgnew = cv2.remap(img, mapx, mapy, interpolation=cv2.INTER_LINEAR)
 
 	if returnK:
 		# change Kopt to vertical coordinate first, horizontal coordinate second
 		Kopt = swapK(Kopt)
+		Kopt[0,2] = img.shape[0] - Kopt[0,2]
 		return imgnew, Kopt
 	else:
 		return imgnew
@@ -35,7 +37,7 @@ def swapK(K):
 	# Swaps the order of x and y in the intrinsic matrix K
 	Knew = K.copy()
 	Knew[[0,1],:] = K[[1,0],:]
-	Knew[[0,1],:] = Knew[[1,0],:]
+	Knew[:,[0,1]] = Knew[:,[1,0]]
 	return Knew
 
 
@@ -162,302 +164,48 @@ def pixToWorldDist(pos1, pos2, dist, K, plane=np.array([0, 0, 1]), R=np.eye(3), 
 		return (pWorld1, pWorld2)
 
 
-def vanishingPoints(img, show=False):
+def PnP(imgpts, objpts, K=None, shape=None, ransac=False):
+
+	# Input shapes -- imgpts: nx2, objpts: nx3, K: 3x3
+	# If K or shape is None, then imgpts is in camera coordinates (meters not pixels). No x/y flipping or K matrix is applied.
+
+	if type(imgpts)==list or type(imgpts)==tuple:
+		imgpts = np.stack(imgpts, axis=0)
+	if type(objpts)==list or type(objpts)==tuple:
+		objpts = np.stack(objpts, axis=0)
+
+	imgpts = imgpts.astype(np.float64)
+	objpts = objpts.astype(np.float64)
+
+	Rcoord = np.array([[0,-1,0],[1,0,0],[0,0,1]]) # opencv coordinate from wrt my coordinate frame
+
+	if K is None or shape is None:
+		K = np.eye(3)
+		imgpts = np.stack((imgpts[:,0],imgpts[:,1]), axis=1) # if imgpts is nx3, make it nx2
+	else:
+		K = swapK(K) # convert to [horizontal, vertical] for opencv
+		K[1,2] = shape[0] - K[1,2] # opencv imgcenter is relative to top left instead of bottom left
+		imgpts = np.stack((imgpts[:,1],imgpts[:,0]), axis=1) # convert to [horizontal, vertical] for opencv
+		objpts = (Rcoord.T @ objpts.T).T
+	
+	imgpts = np.expand_dims(imgpts, axis=1) # add extra dimension so solvpnp wont error out (now nx1x2)
+
+	if ransac:
+		_, rvec, T, inliers = cv2.solvePnPRansac(objpts, imgpts, K, np.array([[0,0,0,0]]), flags=cv2.SOLVEPNP_EPNP)
+		print(inliers)
+	else:
+		_, rvec, T = cv2.solvePnP(objpts, imgpts, K, np.array([[0,0,0,0]]), flags=cv2.SOLVEPNP_EPNP)
+
+	R = cv2.Rodrigues(rvec)[0] # axis angle to rotation matrix
+
+	if not (K is None or shape is None):
+		T = Rcoord @ T # transform back to unrotated coordinate frame (pre multiply for local transform)
+
+	if ransac:
+		return (R, T, inliers)
+	else:
+		return (R, T)
 
-	# Returns numVP vanishing points in the image via edge detection and ransac
-
-	inlierThreshold = 3
-	ransacIter = 1000
-	smoothing = 2
-
-	edgelets1 = compute_edgelets(img, sigma=smoothing)
-	vp1 = ransac_vanishing_point(edgelets1, ransacIter, threshold_inlier=inlierThreshold) # Find first vanishing point
-	vp1 = vp1 / vp1[2]
-	if show:
-		vis_edgelets(img, edgelets1)
-		vis_model(img, vp1)
-
-	edgelets2 = remove_inliers(vp1, edgelets1, 2*inlierThreshold) # Remove inlier to remove dominating direction.
-	vp2 = ransac_vanishing_point(edgelets2, ransacIter, threshold_inlier=inlierThreshold) # Find second vanishing point
-	vp2 = vp2 / vp2[2]
-	if show:
-		vis_edgelets(img, edgelets2)
-		vis_model(img, vp2)
-
-	vps = np.stack((vp1, vp2), axis=1)
-	vps = np.stack((vps[1,:], vps[0,:]), axis=0)
-
-	return vps
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## Helper Functions ##
-
-def compute_edgelets(image, sigma=3):
-	"""Create edgelets as in the paper.
-
-	Uses canny edge detection and then finds (small) lines using probabilstic
-	hough transform as edgelets.
-
-	Parameters
-	----------
-	image: ndarray
-		Image for which edgelets are to be computed.
-	sigma: float
-		Smoothing to be used for canny edge detection.
-
-	Returns
-	-------
-	locations: ndarray of shape (n_edgelets, 2)
-		Locations of each of the edgelets.
-	directions: ndarray of shape (n_edgelets, 2)
-		Direction of the edge (tangent) at each of the edgelet.
-	strengths: ndarray of shape (n_edgelets,)
-		Length of the line segments detected for the edgelet.
-	"""
-	gray_img = color.rgb2gray(image)
-	edges = feature.canny(gray_img, sigma)
-	lines = transform.probabilistic_hough_line(edges, line_length=3,
-											   line_gap=2)
-
-	locations = []
-	directions = []
-	strengths = []
-
-	for p0, p1 in lines:
-		p0, p1 = np.array(p0), np.array(p1)
-		locations.append((p0 + p1) / 2)
-		directions.append(p1 - p0)
-		strengths.append(np.linalg.norm(p1 - p0))
-
-	# convert to numpy arrays and normalize
-	locations = np.array(locations)
-	directions = np.array(directions)
-	strengths = np.array(strengths)
-
-	directions = np.array(directions) / \
-		np.linalg.norm(directions, axis=1)[:, np.newaxis]
-
-	return (locations, directions, strengths)
-
-
-def edgelet_lines(edgelets):
-	"""Compute lines in homogenous system for edglets.
-
-	Parameters
-	----------
-	edgelets: tuple of ndarrays
-		(locations, directions, strengths) as computed by `compute_edgelets`.
-
-	Returns
-	-------
-	lines: ndarray of shape (n_edgelets, 3)
-		Lines at each of edgelet locations in homogenous system.
-	"""
-	locations, directions, _ = edgelets
-	normals = np.zeros_like(directions)
-	normals[:, 0] = directions[:, 1]
-	normals[:, 1] = -directions[:, 0]
-	p = -np.sum(locations * normals, axis=1)
-	lines = np.concatenate((normals, p[:, np.newaxis]), axis=1)
-	return lines
-
-
-def compute_votes(edgelets, model, threshold_inlier=5):
-	"""Compute votes for each of the edgelet against a given vanishing point.
-
-	Votes for edgelets which lie inside threshold are same as their strengths,
-	otherwise zero.
-
-	Parameters
-	----------
-	edgelets: tuple of ndarrays
-		(locations, directions, strengths) as computed by `compute_edgelets`.
-	model: ndarray of shape (3,)
-		Vanishing point model in homogenous cordinate system.
-	threshold_inlier: float
-		Threshold to be used for computing inliers in degrees. Angle between
-		edgelet direction and line connecting the  Vanishing point model and
-		edgelet location is used to threshold.
-
-	Returns
-	-------
-	votes: ndarry of shape (n_edgelets,)
-		Votes towards vanishing point model for each of the edgelet.
-
-	"""
-	vp = model[:2] / model[2]
-
-	locations, directions, strengths = edgelets
-
-	est_directions = locations - vp
-	dot_prod = np.sum(est_directions * directions, axis=1)
-	abs_prod = np.linalg.norm(directions, axis=1) * \
-		np.linalg.norm(est_directions, axis=1)
-	abs_prod[abs_prod == 0] = 1e-5
-
-	cosine_theta = dot_prod / abs_prod
-	theta = np.arccos(np.abs(cosine_theta))
-
-	theta_thresh = threshold_inlier * np.pi / 180
-	return (theta < theta_thresh) * strengths
-
-
-def remove_inliers(model, edgelets, threshold_inlier=10):
-	"""Remove all inlier edglets of a given model.
-
-	Parameters
-	----------
-	model: ndarry of shape (3,)
-		Vanishing point model in homogenous coordinates which is to be
-		reestimated.
-	edgelets: tuple of ndarrays
-		(locations, directions, strengths) as computed by `compute_edgelets`.
-	threshold_inlier: float
-		threshold to be used for finding inlier edgelets.
-
-	Returns
-	-------
-	edgelets_new: tuple of ndarrays
-		All Edgelets except those which are inliers to model.
-	"""
-	inliers = compute_votes(edgelets, model, 10) > 0
-	locations, directions, strengths = edgelets
-	locations = locations[~inliers]
-	directions = directions[~inliers]
-	strengths = strengths[~inliers]
-	edgelets = (locations, directions, strengths)
-	return edgelets
-
-
-def ransac_vanishing_point(edgelets, num_ransac_iter=2000, threshold_inlier=5):
-	"""Estimate vanishing point using Ransac.
-
-	Parameters
-	----------
-	edgelets: tuple of ndarrays
-		(locations, directions, strengths) as computed by `compute_edgelets`.
-	num_ransac_iter: int
-		Number of iterations to run ransac.
-	threshold_inlier: float
-		threshold to be used for computing inliers in degrees.
-
-	Returns
-	-------
-	best_model: ndarry of shape (3,)
-		Best model for vanishing point estimated.
-	"""
-	locations, directions, strengths = edgelets
-	lines = edgelet_lines(edgelets)
-
-	num_pts = strengths.size
-
-	arg_sort = np.argsort(-strengths)
-	first_index_space = arg_sort[:num_pts // 5]
-	second_index_space = arg_sort[:num_pts // 2]
-
-	best_model = None
-	best_votes = np.zeros(num_pts)
-
-	for ransac_iter in range(num_ransac_iter):
-		ind1 = np.random.choice(first_index_space)
-		ind2 = np.random.choice(second_index_space)
-
-		l1 = lines[ind1]
-		l2 = lines[ind2]
-
-		current_model = np.cross(l1, l2)
-
-		if np.sum(current_model**2) < 1 or current_model[2] == 0:
-			# reject degenerate candidates
-			continue
-
-		current_votes = compute_votes(
-			edgelets, current_model, threshold_inlier)
-
-		if current_votes.sum() > best_votes.sum():
-			best_model = current_model
-			best_votes = current_votes
-
-	return best_model
-
-
-def vis_edgelets(image, edgelets, show=True):
-    """Helper function to visualize edgelets."""
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10, 10))
-    plt.imshow(image)
-    locations, directions, strengths = edgelets
-    for i in range(locations.shape[0]):
-        xax = [locations[i, 0] - directions[i, 0] * strengths[i] / 2,
-               locations[i, 0] + directions[i, 0] * strengths[i] / 2]
-        yax = [locations[i, 1] - directions[i, 1] * strengths[i] / 2,
-               locations[i, 1] + directions[i, 1] * strengths[i] / 2]
-
-        plt.plot(xax, yax, 'r-')
-
-    if show:
-        plt.show()
-
-
-def vis_model(image, model, show=True):
-    """Helper function to visualize computed model."""
-    import matplotlib.pyplot as plt
-    edgelets = compute_edgelets(image)
-    locations, directions, strengths = edgelets
-    inliers = compute_votes(edgelets, model, 10) > 0
-
-    edgelets = (locations[inliers], directions[inliers], strengths[inliers])
-    locations, directions, strengths = edgelets
-    vis_edgelets(image, edgelets, False)
-    vp = model / model[2]
-    plt.plot(vp[0], vp[1], 'bo')
-    for i in range(locations.shape[0]):
-        xax = [locations[i, 0], vp[0]]
-        yax = [locations[i, 1], vp[1]]
-        plt.plot(xax, yax, 'b-.')
-
-    if show:
-        plt.show()
 
 
 
