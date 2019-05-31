@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-from skimage import feature, color, transform
 
 
 def undistort(img, K, d, returnK=False):
@@ -166,6 +165,9 @@ def pixToWorldDist(pos1, pos2, dist, K, plane=np.array([0, 0, 1]), R=np.eye(3), 
 
 def PnP(imgpts, objpts, K=None, shape=None, ransac=False):
 
+	# Finds R, T of an object w.r.t the camera given:
+	#     objpts: the coordinates of keypoints in the object's frame
+	#     imgpts: the pixel coordinates of those keypoints in the image
 	# Input shapes -- imgpts: nx2, objpts: nx3, K: 3x3
 	# If K or shape is None, then imgpts is in camera coordinates (meters not pixels). No x/y flipping or K matrix is applied.
 
@@ -207,5 +209,91 @@ def PnP(imgpts, objpts, K=None, shape=None, ransac=False):
 		return (R, T)
 
 
+def RotMat(angle=0, axis=[0,0,1], degrees=False):
+
+	# converts axis angle to a rotation matrix
+	# This can be used to convert from euler angles: RotMat(angle=np.pi/2,axis=[0,0,1]) @ RotMat(angle=np.pi/4,axis=[0,1,0])
+
+	if degrees:
+		angle = angle * (180 / np.pi)
+
+	R, _ = cv2.Rodrigues(angle * np.reshape(axis, (3,1)))
+
+	return R
 
 
+def stereoDepth(img1, img2, R, T, K1, K2=None, dist1=np.array([[0,0,0,0]]), dist2=np.array([[0,0,0,0]])):
+
+	# Switching to opencv coordinate frame, initialization
+	if K2 is None:
+		K2 = K1
+	K1 = swapK(K1)
+	K1[1,2] = img1.shape[0] - K1[1,2]
+	K2 = swapK(K2)
+	K2[1,2] = img2.shape[0] - K2[1,2]
+	d1 = np.zeros((4,1))
+	d1[:len(dist1),0] = dist1
+	d2 = np.zeros((4,1))
+	d2[:len(dist2),0] = dist2
+	size = (img1.shape[1],img1.shape[2])
+
+	# Rectify both images
+	RL, RR, PL, PR, Q, _, _ = cv2. stereoRectify(K1, d1, K2, d2, size, R, T, alpha=0)
+	mapL1, mapL2 = cv2.initUndistortRectifyMap(K1, d1, RL, PL, size, cv2.CV_32FC1)
+	mapR1, mapR2 = cv2.initUndistortRectifyMap(K2, d2, RR, PR, size, cv2.CV_32FC1)
+	img1 = cv2.remap(img1, mapL1, mapL2, cv2.INTER_LINEAR)
+	img2 = cv2.remap(img2, mapR1, mapR2, cv2.INTER_LINEAR)
+
+	# Find disparity
+	search_range = 128 # max number of pixels away to look for a matching block
+	block_size = 15 # smaller blocks give more resolution, but higher chance of incorrect match
+	stereo = cv2.StereoBM(cv2.STEREO_BM_BASIC_PRESET, ndisparities=search_range, SADWindowSize=block_size)
+	disparity = stereo.compute(img1, img2, disptype=cv2.CV_32F) # when disptype is default, divide output by 16
+	disparity = cv2.filterSpeckles(disparity, 0, 40, search_range) # change specks with size<40 to a disparity of 0
+
+	# Get depth map
+	depth = cv2.reprojectImageTo3D(disparity, Q)
+
+	return depth 
+
+
+def homography(img1, img2):
+
+	# H = K @ [r1 r2 T]
+	# https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/
+	# py_feature2d/py_feature_homography/py_feature_homography.html
+
+	# Find the keypoints and descriptors with SIFT
+	sift = cv2.SIFT()
+	kp1, des1 = sift.detectAndCompute(img1,None)
+	kp2, des2 = sift.detectAndCompute(img2,None)
+
+	# Match keypoints
+	FLANN_INDEX_KDTREE = 0
+	index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
+	search_params = dict(checks = 50)
+	flann = cv2.FlannBasedMatcher(index_params, search_params)
+	matches = flann.knnMatch(des1,des2,k=2)
+
+	# Filter only the good matches as per Lowe's ratio test.
+	good = []
+	for m,n in matches:
+	    if m.distance < 0.7*n.distance:
+	        good.append(m)
+    src_pts = np.float32([ kp1[m.queryIdx].pt for m in good ]).reshape(-1,1,2)
+    dst_pts = np.float32([ kp2[m.trainIdx].pt for m in good ]).reshape(-1,1,2)
+
+    # Calculate Homography
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
+
+    # TODO: test, change coordinates of H
+
+
+def decomposeHomography(H, K):
+
+	# https://stackoverflow.com/questions/41526335/decompose-homography-matrix-in-opencv-python
+
+	_, Rs, Ts, Ns = cv2.decomposeHomographyMat(H, K)
+
+	# TODO: change coordinates of H, K, R, T, N
+	# select which R, T is best (cis580 hw3 selects the pair that results in the most ponints in front of both cameras)
