@@ -1,8 +1,9 @@
 from scipy.stats import multivariate_normal, _multivariate
 from scipy.optimize import fmin, fmin_slsqp
-from time import time
+from functools import reduce
 import numpy as np
-
+import math
+from sklearn.svm import SVR
 
 class GaussND:
 
@@ -45,12 +46,28 @@ class GaussND:
 		return self.min(x0=x0,eqcons=eqcons,ieqcons=ieqcons,maximize=True)
 
 
+	def fit(self, x, y, gamma='scale', C=1.0):
+		model = SVR(gamma=gamma, C=C)
+		model.fit(x,y)
+		self.numC = list(model.dual_coef_)
+		self.numN = [multivariate_normal(
+						mean=np.reshape(model.support_vectors_[i,:],(-1,)),
+						cov=1/np.sqrt(2*model._gamma)*np.eye(model.support_vectors_.shape[1]))
+					for i in range(model.support_vectors_.shape[0])]
+		self.numC.append(model.intercept_)
+		self.numN.append(None)
+
+
 	def __mul__(self,other):
 		if not isinstance(other,GaussND):
 			other = GaussND(numC=other)
 		# (a / b) * (c / d) = ac / bd
 		numN, numC = self.multiplyPoly(self.numN,other.numN,self.numC,other.numC)
 		denN, denC = self.multiplyPoly(self.denN,other.denN,self.denC,other.denC)
+		#factor = gcd(numC + denC)
+		factor = min(denC)
+		numC = list(map(lambda x: x / factor, numC))
+		denC = list(map(lambda x: x / factor, denC))
 		return GaussND(numC=numC,numN=numN,denC=denC,denN=denN)
 
 
@@ -61,6 +78,11 @@ class GaussND:
 		numN0, numC0 = self.multiplyPoly(self.numN,other.denN,self.numC,other.denC)
 		numN1, numC1 = self.multiplyPoly(self.denN,other.numN,self.denC,other.numC)
 		denN, denC = self.multiplyPoly(self.denN,other.denN,self.denC,other.denC)
+		#factor = gcd(numC0 + numC1 + denC)
+		factor = min(denC)
+		numC0 = list(map(lambda x: x / factor, numC0))
+		numC1 = list(map(lambda x: x / factor, numC1))
+		denC = list(map(lambda x: x / factor, denC))
 		return GaussND(numC=numC0+numC1,numN=numN0+numN1,denC=denC,denN=denN)
 
 
@@ -130,7 +152,7 @@ class GaussND:
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
 			density = self.evaluate(coords.T).reshape(xi.shape)
 			# Plot scatter with mayavi
-			figure = mlab.figure('DensityPlot')
+			mlab.figure('DensityPlot')
 			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
 			minval = 0
 			maxval = density.max()
@@ -140,7 +162,6 @@ class GaussND:
 		elif len(lim) == 2:
 			from matplotlib import cm
 			import matplotlib.pyplot as plt
-			from mpl_toolkits.mplot3d import Axes3D
 			fig = plt.figure()
 			ax = fig.add_axes([0,0,1,1], projection='3d')
 			# Evaluate
@@ -161,7 +182,7 @@ class GaussND:
 			xi = np.mgrid[lim[0][0]:lim[0][1]:100j]
 			density = self.evaluate(np.array([xi])).reshape(xi.shape)
 			# Plot surface with matplotlib
-			func = plt.plot(xi, density)
+			plt.plot(xi, density)
 			plt.xlabel("$x$")
 			plt.show()
 
@@ -227,7 +248,8 @@ class GaussND:
 		return invself.__mul__(other)
 
 		
-
+def gcd(nums):
+	return reduce(lambda x,y: math.gcd(x,y), nums)
 		
 
 

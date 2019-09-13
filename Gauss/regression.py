@@ -10,6 +10,7 @@ class Regressor:
 		self.levels = 5
 		self.map = {}
 		self.dim = 3
+		self.offset = 0
 
 	# TODO: add fit(x,y) command that uses svm with rbf kernel to find gaussians
 	# https://stackoverflow.com/questions/31300131/extracting-coefficients-with-a-nonlinear-kernel-using-sklearn-svm-python
@@ -36,7 +37,6 @@ class Regressor:
 	def add(self,pos,val,radius=1):
 		pos = np.array(pos)
 		self.dim = pos.size
-		currval = self.eval(pos)
 		cov = radius * np.eye(pos.size)
 		gaussian = GaussND(numN=(pos,cov))
 		newval = gaussian[pos]
@@ -45,6 +45,10 @@ class Regressor:
 			
 
 	def addg(self,gaussian):
+		if gaussian.numN[0] is None:
+			self.offset += gaussian.numC[0]
+			return
+		self.dim = gaussian.numN[0].mean.shape[0]
 		pos = gaussian.numN[0].mean
 		radius = gaussian.numN[0].cov[0][0]
 		deepestlevel = min(round(log(1/radius * self.restop) / log(1/self.resstep))-1, self.levels-1)
@@ -64,6 +68,20 @@ class Regressor:
 			curr[key][0].append(gaussian)
 
 
+	def fit(self, x, y, gamma='scale', C=1.0):
+		# x numpy shape: (nsamples, ndim), y numpy shape: (nsamples,)
+		model = SVR(gamma=gamma, C=C)
+		model.fit(x,y)
+		numC = np.reshape(model.dual_coef_, (-1,)).tolist()
+		numN = [ (np.reshape(model.support_vectors_[i,:],(-1,)), 1/np.sqrt(2*model._gamma)*np.eye(model.support_vectors_.shape[1]))
+				for i in range(model.support_vectors_.shape[0])]
+		numC.append(np.asscalar(model.intercept_))
+		numN.append(None)
+		for i in range(len(numC)):
+			gaussian = GaussND(numC=numC[i],numN=numN[i])
+			self.addg(gaussian)
+
+
 	def eval(self,pos):
 		if not isinstance(pos,np.ndarray):
 			pos = np.array(pos)
@@ -81,7 +99,7 @@ class Regressor:
 				break
 			gaussians = gaussians + curr[key][0]
 			curr = curr[key][1]
-		return sum(map(lambda f: f[pos], gaussians))
+		return sum(list(map(lambda f: f[pos], gaussians))) + self.offset
 
 
 	def equation(self, pos):
@@ -96,6 +114,7 @@ class Regressor:
 			for term in curr[key][0]:
 				eqn += term
 			curr = curr[key][1]
+		eqn += self.offset
 		return eqn
 
 
@@ -175,7 +194,7 @@ class Regressor:
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
 			density = self.eval(coords).reshape(xi.shape)
 			# Plot scatter with mayavi
-			figure = mlab.figure('DensityPlot',fgcolor=(0.0,0.0,0.0),bgcolor=(0.85,0.85,0.85),size=(600, 480))
+			mlab.figure('DensityPlot',fgcolor=(0.0,0.0,0.0),bgcolor=(0.85,0.85,0.85),size=(600, 480))
 			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
 			minval = 0
 			maxval = density.max()
@@ -194,7 +213,7 @@ class Regressor:
 			density = self.eval(coords).reshape(xi.shape)
 			# Plot surface with matplotlib
 			surf = ax.plot_surface(xi, yi, density, cmap=cm.coolwarm, linewidth=0, antialiased=False, rcount=100, ccount=100, alpha=0.7)
-			cnt = ax.contour(xi, yi, density, linewidth=5)
+			ax.contour(xi, yi, density, linewidth=5)
 			ax.view_init(90, -90)
 			plt.xlabel("$x_1$")
 			plt.ylabel("$x_2$")
@@ -207,12 +226,20 @@ class Regressor:
 			xi = np.mgrid[lim[0][0]:lim[0][1]:100j]
 			density = self.eval(np.array([xi])).reshape(xi.shape)
 			# Plot surface with matplotlib
-			func = plt.plot(xi, density)
+			plt.plot(xi, density)
 			plt.xlabel("$x$")
 			plt.show()
 
 
-def main():
+def test_fit():
+	from sklearn.datasets.samples_generator import make_blobs
+	x, y = make_blobs(n_samples=50, centers=2, random_state=0, cluster_std=0.60)
+	r = Regressor()
+	r.fit(x,y)
+	r.plot()
+
+
+def test_add():
 	r = Regressor()
 	r += ([2,2,-1],1,1)           # x, f(x), radius
 	r += ([-3,0,1],-2,0.5)		 # x, f(x), radius (negative will not be displayed on plot)
@@ -222,7 +249,8 @@ def main():
 	print("argmin(r) = ", xopt)			# Sure engouh, xopt = [-3,0,0], the location where we set the function to -2
 	print("min(r) = ", eq[xopt])        # The analytical equation can be evaluated
 	print("r([0,0,0]) = ", r[[0,0,0]])  # Or the regressor can be evaluated directly
-	r.plot()					# Plots the R3 -> R1 function
+	r.plot()	
+
 
 if __name__ == '__main__':
-	main()
+	test_fit()
