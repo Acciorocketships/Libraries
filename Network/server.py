@@ -4,41 +4,48 @@ from datetime import datetime
 
 class Server:
 
+	SERVER_PORT = 8888
+
 	def __init__(self):
-		self.node = Network(host=None, port=8888, otherport=8888)
+		self.node = Network(host=None, port=Server.SERVER_PORT)
 		self.node.connectCallback = self.newConnection
-		self.connections = set()
+		self.connections = {}
 		self.running = False
 		self.adding = None
 		self.run()
 
 	def newConnection(self, address):
 		self.adding = address
-		self.node.send(self.connections, name='connections', host=address) # Send to new connection first
-		self.connections.add(address)
-		print('New Connection:', address)
-		self.sendConnections() # Update the connections for everyone else
+		while self.node.data.get('last connection info', None) is None:
+			time.sleep(0.01)
+		ip = {'address': address, 'port': self.node.data['last connection info']['port']}
+		print('New Connection:', ip)
+		self.connections[self.node.data['last connection info']['name']] = ip
+		self.node.send(self.connections, name='connections', host=ip['address'], port=ip['port'])
+		self.sendConnections()
+		del self.node.data['last connection info']
 		self.adding = None
 		
 	def pruneConnections(self):
 		while self.running:
 			remove = set()
-			for address in self.connections.copy():
-				if address == self.adding:
+			for name, ip in self.connections.copy().items():
+				if ip['address'] == self.adding:
 					continue # Don't remove a connection while adding it
 				try:
-					self.node.send(datetime.now(), name='ConnectionTest', host=address)
+					self.node.send(datetime.now(), name='last communication time', host=ip['address'])
 				except:
-					print('Disconnected:', address)
-					remove.add(address)
+					print('Disconnected: ' + str(ip['address']) + " : " + str(ip['port']))
+					remove.add(name)
 			if len(remove) > 0:
-				self.connections -= remove
+				for name in remove:
+					del self.connections[name]
 				self.sendConnections() # Update everyone's connection list
 		self.node.close()
 
 	def sendConnections(self):
-		for address in self.connections.copy():
-			self.node.send(self.connections, name='connections', host=address)
+		for name, ip in self.connections.copy().items():
+			self.node.send(self.connections, name='connections', host=ip['address'], port=ip['port'])
 
 	def run(self):
 		self.running = True

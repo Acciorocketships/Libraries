@@ -8,7 +8,7 @@ import time
 
 class Network:
 
-	def __init__(self,port=8080,host=None,otherport=None,otherhost=None):
+	def __init__(self,port=8000,host=None,otherport=None,otherhost=None):
 		self.s = None # Socket Sender
 		self.r = None # Socket Listener
 		self.host = host if (host is not None) else socket.gethostname() # The host of this node
