@@ -222,78 +222,94 @@ def RotMat(angle=0, axis=[0,0,1], degrees=False):
 	return R
 
 
-def stereoDepth(img1, img2, R, T, K1, K2=None, dist1=np.array([[0,0,0,0]]), dist2=np.array([[0,0,0,0]])):
+# def stereoDepth(img1, img2, R, T, K1, K2=None, dist1=np.array([0,0,0,0]), dist2=np.array([0,0,0,0])):
 
-	# Switching to opencv coordinate frame, initialization
-	if K2 is None:
-		K2 = K1
-	K1 = swapK(K1)
-	K1[1,2] = img1.shape[0] - K1[1,2]
-	K2 = swapK(K2)
-	K2[1,2] = img2.shape[0] - K2[1,2]
-	d1 = np.zeros((4,1))
-	d1[:len(dist1),0] = dist1
-	d2 = np.zeros((4,1))
-	d2[:len(dist2),0] = dist2
-	size = (img1.shape[1],img1.shape[2])
+# 	# Switching to opencv coordinate frame, initialization
+# 	if K2 is None:
+# 		K2 = K1
+# 	K1 = swapK(K1)
+# 	K1[1,2] = img1.shape[0] - K1[1,2]
+# 	K2 = swapK(K2)
+# 	K2[1,2] = img2.shape[0] - K2[1,2]
+# 	d1 = np.zeros((4,1))
+# 	d1[:len(dist1),0] = dist1
+# 	d2 = np.zeros((4,1))
+# 	d2[:len(dist2),0] = dist2
+# 	size = (img1.shape[1],img1.shape[0])
+# 	T = np.reshape(T, (3,1))
+# 	T = T[[1,0,2]]
 
-	# Rectify both images
-	RL, RR, PL, PR, Q, _, _ = cv2. stereoRectify(K1, d1, K2, d2, size, R, T, alpha=0)
-	mapL1, mapL2 = cv2.initUndistortRectifyMap(K1, d1, RL, PL, size, cv2.CV_32FC1)
-	mapR1, mapR2 = cv2.initUndistortRectifyMap(K2, d2, RR, PR, size, cv2.CV_32FC1)
-	img1 = cv2.remap(img1, mapL1, mapL2, cv2.INTER_LINEAR)
-	img2 = cv2.remap(img2, mapR1, mapR2, cv2.INTER_LINEAR)
+# 	R = R.astype('float')
+# 	T = T.astype('float')
+# 	d1 = d1.astype('float')
+# 	d2 = d2.astype('float')
+# 	K1 = K1.astype('float')
+# 	K2 = K2.astype('float')
 
-	# Find disparity
-	search_range = 128 # max number of pixels away to look for a matching block
-	block_size = 15 # smaller blocks give more resolution, but higher chance of incorrect match
-	stereo = cv2.StereoBM(cv2.STEREO_BM_BASIC_PRESET, ndisparities=search_range, SADWindowSize=block_size)
-	disparity = stereo.compute(img1, img2, disptype=cv2.CV_32F) # when disptype is default, divide output by 16
-	disparity = cv2.filterSpeckles(disparity, 0, 40, search_range) # change specks with size<40 to a disparity of 0
+# 	# Rectify both images
+# 	RL, RR, PL, PR, Q, _, _ = cv2. stereoRectify(K1, d1, K2, d2, size, R, T, alpha=0)
+# 	mapL1, mapL2 = cv2.initUndistortRectifyMap(K1, d1, RL, PL, size, cv2.CV_32FC1)
+# 	mapR1, mapR2 = cv2.initUndistortRectifyMap(K2, d2, RR, PR, size, cv2.CV_32FC1)
+# 	img1 = cv2.remap(img1, mapL1, mapL2, cv2.INTER_LINEAR)
+# 	img2 = cv2.remap(img2, mapR1, mapR2, cv2.INTER_LINEAR)
 
-	# Get depth map
-	depth = cv2.reprojectImageTo3D(disparity, Q)
+# 	# Find disparity
+# 	search_range = 128 # max number of pixels away to look for a matching block
+# 	block_size = 15 # smaller blocks give more resolution, but higher chance of incorrect match
+# 	#matcher = cv2.StereoBM(ndisparities=search_range, SADWindowSize=block_size)
+# 	matcher = cv2.StereoBM_create(numDisparities=search_range, blockSize=block_size)
+# 	disparity = matcher.compute(cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY), 
+# 								cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)) / 16
+# 	#cv2.filterSpeckles(disparity.astype(np.int16), 0, 40, search_range) # change specks with size<40 to a disparity of 0
 
-	return depth 
+# 	# Get depth map
+# 	depth = cv2.reprojectImageTo3D(disparity.astype(np.int16), Q)
 
-
-def homography(img1, img2):
-
-	# H = K @ [r1 r2 T]
-	# https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/
-	# py_feature2d/py_feature_homography/py_feature_homography.html
-
-	# Find the keypoints and descriptors with SIFT
-	sift = cv2.SIFT()
-	kp1, des1 = sift.detectAndCompute(img1,None)
-	kp2, des2 = sift.detectAndCompute(img2,None)
-
-	# Match keypoints
-	FLANN_INDEX_KDTREE = 0
-	index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
-	search_params = dict(checks = 50)
-	flann = cv2.FlannBasedMatcher(index_params, search_params)
-	matches = flann.knnMatch(des1,des2,k=2)
-
-	# Filter only the good matches as per Lowe's ratio test.
-	good = []
-	for m,n in matches:
-	    if m.distance < 0.7*n.distance:
-	        good.append(m)
-    src_pts = np.float32([ kp1[m.queryIdx].pt for m in good ]).reshape(-1,1,2)
-    dst_pts = np.float32([ kp2[m.trainIdx].pt for m in good ]).reshape(-1,1,2)
-
-    # Calculate Homography
-    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
-
-    # TODO: test, change coordinates of H
+# 	return depth 
 
 
-def decomposeHomography(H, K):
+# def homography(img1, img2, K=None):
 
-	# https://stackoverflow.com/questions/41526335/decompose-homography-matrix-in-opencv-python
+# 	# Homography:
+# 	# https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/
+# 	# py_feature2d/py_feature_homography/py_feature_homography.html
+# 	# Homography Decomposition (if K is given):
+# 	# https://stackoverflow.com/questions/41526335/decompose-homography-matrix-in-opencv-python
 
-	_, Rs, Ts, Ns = cv2.decomposeHomographyMat(H, K)
+# 	# Find the keypoints and descriptors with SIFT
+# 	sift = cv2.xfeatures2d.SIFT_create()
+# 	kp1, des1 = sift.detectAndCompute(img1,None)
+# 	kp2, des2 = sift.detectAndCompute(img2,None)
 
-	# TODO: change coordinates of H, K, R, T, N
-	# select which R, T is best (cis580 hw3 selects the pair that results in the most ponints in front of both cameras)
+# 	# Match keypoints
+# 	FLANN_INDEX_KDTREE = 0
+# 	index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
+# 	search_params = dict(checks = 50)
+# 	flann = cv2.FlannBasedMatcher(index_params, search_params)
+# 	matches = flann.knnMatch(des1,des2,k=2)
+
+# 	# Filter only the good matches as per Lowe's ratio test.
+# 	good = []
+# 	for m,n in matches:
+# 		if m.distance < 0.7*n.distance:
+# 			good.append(m)
+# 	src_pts = np.float32([ kp1[m.queryIdx].pt for m in good ]).reshape(-1,1,2)
+# 	dst_pts = np.float32([ kp2[m.trainIdx].pt for m in good ]).reshape(-1,1,2)
+
+# 	# Calculate Homography
+# 	Hcv, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+# 	# F * p2 = F * H * p1 --> p2 = (F^-1 * H * F) p1
+# 	h = img1.shape[0]
+# 	F = np.array([[0,1,0],[-1,0,h],[0,0,1]]) # my coordinate system relative to opencv coordinate system
+# 	Finv = np.linalg.inv(F)
+# 	H = Finv @ Hcv @ F
+
+# 	if K is not None:
+# 		_, Rs, Ts, Ns = cv2.decomposeHomographyMat(Hcv, K)
+# 		Rs = Finv @ Rs
+# 		Ts = Finv @ Ts
+# 		Ns = Finv @ Ns
+# 		return H, Rs, Ts, Ns
+# 	else:
+# 		return H

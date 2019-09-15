@@ -3,7 +3,7 @@ from network import *
 
 class Client:
 
-	SERVER_ADDRESS = 'Neutrino.local' #'168.235.109.146'
+	SERVER_ADDRESS = '168.235.109.146'
 	SERVER_PORT = 8888
 
 	def __init__(self, name, port):
@@ -43,6 +43,6 @@ class Client:
 
 if __name__ == '__main__':
 
-	client = Client('node1', 8001)
+	client = Client('node0', 8000)
 
 	import code; code.interact(local=locals())
