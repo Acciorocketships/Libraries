@@ -1,318 +1,279 @@
-from mpmath import *
-from sympy import *
-from sympy.stats import *
+from scipy.stats import multivariate_normal, _multivariate
+from scipy.optimize import fmin, fmin_slsqp
+from functools import reduce
+import numpy as np
+import math
+from sklearn.svm import SVR
 
-# also make a 3D version
+class GaussND:
 
-class Gauss:
-
-	x = Symbol('x')
-
-	c1 = Symbol('c_1')
-	mu1 = Symbol('mu_1')
-	sig1 = Symbol('sigma_1')
-	c2 = Symbol('c_2')
-	mu2 = Symbol('mu_2')
-	sig2 = Symbol('sigma_2')
-
-	minGaussRatio = lambdify( [mu1,mu2,sig1,sig2], (mu2*sig1**2 - mu1*sig2**2) / (sig1**2 - sig2**2) ) # catch sig1==sig2. perhaps with limit?
-
-	gauss = lambdify( [c1,mu1,sig1,x], c1*density(Normal("N",mu1,sig1))(x) )
-
-	def __init__(self,c=[1],mu=[None],sigma=[None],invc=[1],invmu=[None],invsigma=[None]):
-		# ( ∑ c * N(mu,sigma) ) / ( ∑ invc * N(invmu,invsigma) )
-		# for just a constant, do Gauss(c=[const],mu=[None],sigma=[None])
-		self.numC = c if isinstance(c,list) else [c]
-		self.numMu = mu if isinstance(mu,list) else [mu]
-		self.numSig = sigma if isinstance(sigma,list) else [sigma]
-		self.denC = invc if isinstance(invc,list) else [invc]
-		self.denMu = invmu if isinstance(invmu,list) else [invmu]
-		self.denSig = invsigma if isinstance(invsigma,list) else [invsigma]
+	def __init__(self,numN=[None],numC=[1],denN=[None],denC=[1]):
+		# N is a list of tuples (mu, cov)
+		self.numC = numC if isinstance(numC,list) else [numC]
+		self.numN = numN if isinstance(numN,list) else [numN]
+		self.denC = denC if isinstance(denC,list) else [denC]
+		self.denN = denN if isinstance(denN,list) else [denN]
+		for i, term in enumerate(self.numN):
+			if term is not None and not isinstance(term,_multivariate.multivariate_normal_frozen):
+				self.numN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
+		for i, term in enumerate(self.denN):
+			if term is not None and not isinstance(term,_multivariate.multivariate_normal_frozen):
+				self.denN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
 
 
-	def min(self,approx=False,check=False):
-		
-		# the approximation equals the min if there is one term in the numerator and denominator
-		guess = 0
-		totalweighting = 0
-		maxDen = (0, 0, 0)
-		for i in range(len(self.denSig)):
-			# choose term in the denominator with the highest sigma to represent the entire denominator
-			# if there is a constant value, use that
-			if (self.denSig[i] == None and self.denC[i] > maxDen[0]) or \
-			   (maxDen[2] != None and self.denSig[i] > maxDen[2]):
-				maxDen = (self.denC[i], self.denMu[i], self.denSig[i])
-		for i in range(len(self.numSig)):
-			if maxDen[2] != None and self.numSig[i] != None: # if Gauss / Gauss
-				weighting = self.numC[i] * (self.numSig[i] / maxDen[2]) ** 2
-			elif maxDen[2] != None: # if Constant / Gauss
-				weighting = self.numC[i] * 30
-			else: # if Gauss / Constant
-				weighting = self.numC[i] * exp(-5*self.numSig[i]) # 1 when sigma=0, 0 when sigma=inf
-			if self.numSig[i] != maxDen[2] and maxDen[2] != None:
-				if self.numSig[i] == None: # if Constant / Gauss
-					localmin = maxDen[1]
-				else: # if Gauss / Gauss
-					localmin = Gauss.minGaussRatio(self.numMu[i],maxDen[1],self.numSig[i],maxDen[2])
-			elif maxDen[2] == None: # if Gauss / Constant
-				localmin = self.numMu[i]
-			else: # if Constant (from cancellation)
-				localmin = guess / totalweighting # no effect
-			guess += weighting * localmin
-			totalweighting += weighting
-		guess = guess / totalweighting
-		guess = float(guess)
-
-		if approx:
-			return guess
-		return self.localmin(guess,check)
-
-
-	def localmin(self,x,check=False):
-		# The critical point closest to x
-		# This doesn't guarantee a minimum
-		# import time; starttime = time.time()
-		eqn = lambdify([Gauss.x], self.evaluate().diff(Gauss.x), "mpmath")
-		if check:
-			# returns None if no minimum is found
-			# Specify range to verify derivative going from negative to positive
-			offset = 1
-			factor = 2
-			maxiter = 5
-			if eqn(x) < 0:
-				iterations = 0
-				while eqn(x + offset) < 0:
-					if iterations > maxiter:
-						return None
-					offset *= factor
-					iterations += 1
-				root = findroot(eqn,(x,x+offset),solver="pegasus")
-			else:
-				iterations = 0
-				while eqn(x - offset) > 0:
-					if iterations > maxiter:
-						return None
-					offset *= factor
-					iterations += 1
-				root = findroot(eqn,(x-offset,x),solver="pegasus")
-			# Sanity check that it worked
-			if eqn(root) > eqn(root+0.0001):
-				return None
+	def min(self,x0=None,eqcons=[],ieqcons=[],maximize=False):
+		# eqcons (equality constrains) is a list of functions such that f(x)=0
+		# ieqcons (inequality constraints) is a list of fucntions such that f(x)>=0
+		# x0 is the starting point, default [0,0,0]
+		if x0 is None:
+			dim = 0
+			for term in self.numN + self.denN:
+				if term is not None:
+					dim = term.mean.shape[0]
+					break
+			x0 = np.zeros((dim,))
+		# TODO: If there is only one gaussian, return mu
+		# TODO: If there are zero gaussians, return x0
+		f = (lambda x: -self.evaluate(x)) if maximize else self.evaluate
+		if len(eqcons) != 0 or len(ieqcons) != 0:
+			xopt = fmin_slsqp(f,x0,eqcons=eqcons,ieqcons=ieqcons,iprint=0)
 		else:
-			root = findroot(eqn,x,solver="anewton")
-		# print (time.time() - starttime)
-		return float(root)
+			xopt = fmin(f,x0,disp=False)
+		return xopt
 
 
-	def evaluate(self,x=None):
-		# evaluates at a given x, or symbolically if given Symbol('x'). f[x] calls evaluate.
-		if x is None:
-			x = Gauss.x
-		if len(self.numC) > 0:
-			if isinstance(x,Expr):
-				num = sum(map(lambda N: N[0]*density(Normal("N",N[1],N[2]))(x) if (N[1] is not None) else N[0], zip(self.numC,self.numMu,self.numSig)))
-			else:
-				num = sum(map(lambda N: Gauss.gauss(N[0],N[1],N[2],x) if (N[1] is not None) else N[0], zip(self.numC,self.numMu,self.numSig)))
-		else:
-			num = 1
-		if len(self.denC) > 0:
-			if isinstance(x,Expr):
-				den = sum(map(lambda N: N[0]*density(Normal("N",N[1],N[2]))(x) if (N[1] is not None) else N[0], zip(self.denC,self.denMu,self.denSig)))
-			else:
-				den = sum(map(lambda N: Gauss.gauss(N[0],N[1],N[2],x) if (N[1] is not None) else N[0], zip(self.denC,self.denMu,self.denSig)))
-		else:
-			den = 1
-		return num / den
+	def max(self,x0=None,eqcons=[],ieqcons=[]):
+		return self.min(x0=x0,eqcons=eqcons,ieqcons=ieqcons,maximize=True)
 
 
-	def __add__(self,other):
-
-		if not isinstance(other,Gauss):
-			other = Gauss(c=other)
-
-		if self.denC == other.denC and self.denMu==other.denMu and self.denSig==other.denSig:
-			# If the denominators match, just add the numerators
-			numC = self.numC + other.numC
-			numMu = self.numMu + other.numMu
-			numSig = self.numSig + other.numSig
-			denC = list(self.denC)
-			denMu = list(self.denMu)
-			denSig = list(self.denSig)
-		else:
-			# a/b + c/d = (ad + bc) / (bd), where a/b is self and c/d is other
-			ad = self.multiplyPoly((self.numC,self.numMu,self.numSig),(other.denC,other.denMu,other.denSig))
-			bc = self.multiplyPoly((self.denC,self.denMu,self.denSig),(other.numC,other.numMu,other.numSig))
-			bd = self.multiplyPoly((self.denC,self.denMu,self.denSig),(other.denC,other.denMu,other.denSig))
-			numC = ad[0] + bc[0]
-			numMu = ad[1] + bc[1]
-			numSig = ad[2] + bc[2]
-			denC = bd[0]
-			denMu = bd[1]
-			denSig = bd[2]
-
-		return Gauss(c=numC,mu=numMu,sigma=numSig,invc=denC,invmu=denMu,invsigma=denSig)
-
-
-	def __radd__(self,other):
-		return self.__add__(other)
+	def fit(self, x, y, gamma='scale', C=1.0):
+		model = SVR(gamma=gamma, C=C)
+		model.fit(x,y)
+		self.numC = list(model.dual_coef_)
+		self.numN = [multivariate_normal(
+						mean=np.reshape(model.support_vectors_[i,:],(-1,)),
+						cov=1/np.sqrt(2*model._gamma)*np.eye(model.support_vectors_.shape[1]))
+					for i in range(model.support_vectors_.shape[0])]
+		self.numC.append(model.intercept_)
+		self.numN.append(None)
 
 
 	def __mul__(self,other):
-		# us multiplyPoly on num and den a/b * c/d = (ac) / (bd)
-		if not isinstance(other,Gauss):
-			other = Gauss(c=other)
-
-		ac = self.multiplyPoly((self.numC,self.numMu,self.numSig),(other.numC,other.numMu,other.numSig))
-		bd = self.multiplyPoly((self.denC,self.denMu,self.denSig),(other.denC,other.denMu,other.denSig))
-
-		numC = ac[0]
-		numMu = ac[1]
-		numSig = ac[2]
-		denC = bd[0]
-		denMu = bd[1]
-		denSig = bd[2]
-
-		return Gauss(c=numC,mu=numMu,sigma=numSig,invc=denC,invmu=denMu,invsigma=denSig)
-
-	def __rmul__(self,other):
-		return self.__mul__(other)
+		if not isinstance(other,GaussND):
+			other = GaussND(numC=other)
+		# (a / b) * (c / d) = ac / bd
+		numN, numC = self.multiplyPoly(self.numN,other.numN,self.numC,other.numC)
+		denN, denC = self.multiplyPoly(self.denN,other.denN,self.denC,other.denC)
+		#factor = gcd(numC + denC)
+		factor = min(denC)
+		numC = list(map(lambda x: x / factor, numC))
+		denC = list(map(lambda x: x / factor, denC))
+		return GaussND(numC=numC,numN=numN,denC=denC,denN=denN)
 
 
-	def multiplyPoly(self,poly0,poly1):
-		# input is of the form ([c0, c1, ...],[mu0, m1, ...],[sigma0, sigma1, ...])
-		c = [None for i in range(len(poly0[0])*len(poly1[0]))]
-		mu = [None for i in range(len(poly0[0])*len(poly1[0]))]
-		sigma = [None for i in range(len(poly0[0])*len(poly1[0]))]
-
-		for i0 in range(len(poly0[0])):
-			for i1 in range(len(poly1[0])):
-				ci, mui, sigi = self.multiply((poly0[0][i0],poly0[1][i0],poly0[2][i0]),
-									          (poly1[0][i1],poly1[1][i1],poly1[2][i1]))
-				i = i0*len(poly1[0]) + i1
-				c[i] = ci
-				mu[i] = mui
-				sigma[i] = sigi
-
-		return (c,mu,sigma)
+	def __add__(self,other):
+		if not isinstance(other,GaussND):
+			other = GaussND(numC=other)
+		# a/b + c/d = (ad + bc) / (bd), where a/b is self and c/d is other
+		numN0, numC0 = self.multiplyPoly(self.numN,other.denN,self.numC,other.denC)
+		numN1, numC1 = self.multiplyPoly(self.denN,other.numN,self.denC,other.numC)
+		denN, denC = self.multiplyPoly(self.denN,other.denN,self.denC,other.denC)
+		#factor = gcd(numC0 + numC1 + denC)
+		factor = min(denC)
+		numC0 = list(map(lambda x: x / factor, numC0))
+		numC1 = list(map(lambda x: x / factor, numC1))
+		denC = list(map(lambda x: x / factor, denC))
+		return GaussND(numC=numC0+numC1,numN=numN0+numN1,denC=denC,denN=denN)
 
 
-	def multiply(self,gauss0,gauss1):
-		# inputs are of the form (c,mu,sigma)
-		c0, mu0, sig0 = gauss0
-		c1, mu1, sig1 = gauss1
-
-		c = c0 * c1
-		if (mu0 is None) and (mu1 is not None):
-			mu = mu1
-			sig = sig1
-		elif (mu1 is None) and (mu0 is not None):
-			mu = mu0
-			sig = sig0
-		elif (mu1 is None) and (mu0 is None):
-			mu = None
-			sig = None
-		else:
-			mu = (mu0 * sig1**2 + mu1 * sig0**2) / (sig0**2 + sig1**2)
-			sig = sqrt( (sig0**2 * sig1**2) / (sig0**2 + sig1**2) )
-
-		return (c,mu,sig)
+	def multiplyPoly(self,N0,N1,C0=None,C1=None):
+		# Inputs: two lists of gaussians (N0 and N1), and their coefficients (C0 and C1)
+		# Output: tuple of list of gaussian terms and their coefficients (N, C)
+		N = [None for i in range(len(N0)*len(N1))]
+		C = [None for i in range(len(N0)*len(N1))]
+		if C0 is None:
+			C0 = [1 for i in range(len(N0))]
+		if C1 is None:
+			C1 = [1 for i in range(len(N1))]
+		for i0 in range(len(N0)):
+			for i1 in range(len(N1)):
+				i = i0*len(N1) + i1
+				N[i] = self.multiply(N0[i0],N1[i1])
+				C[i] = C0[i0] * C1[i1]
+		return (N, C)
 
 
-	def __rtruediv__(self,other):
-		# other / self
-
-		if not isinstance(other,Gauss):
-			other = Gauss(c=other)
-
-		selfNumC = self.numC
-		selfNumMu = self.numMu
-		selfNumSig = self.numSig
-		selfDenC = self.denC
-		selfDenMu = self.denMu
-		selfDenSig = self.denSig
-		selfcopy = Gauss(c=list(selfDenC),mu=list(selfDenMu),sigma=list(selfDenSig),
-						 invc=list(selfNumC), invmu=list(selfNumMu), invsigma=list(selfNumSig))
-		return selfcopy.__mul__(other)
-
-
-	def __truediv__(self,other):
-		# self / other
-
-		if not isinstance(other,Gauss):
-			other = Gauss(c=other)
-		else:
-			other = Gauss(c=list(other.numC),mu=list(other.numMu),sigma=list(other.numSig),
-						  invc=list(other.denC), invmu=list(other.denMu), invsigma=list(other.denSig))
-		otherNumC = other.numC
-		otherNumMu = other.numMu
-		otherNumSig = other.numSig
-		otherDenC = other.denC
-		otherDenMu = other.denMu
-		otherDenSig = other.denSig
-		other.numC = otherDenC
-		other.numMu = otherDenMu
-		other.numSig = otherDenSig
-		other.denC = otherNumC
-		other.denMu = otherNumMu
-		other.denSig = otherNumSig
-		return self.__mul__(other)
+	def multiply(self,N0,N1):
+		if N0 is None and N1 is None:
+			N = None
+		elif N0 is None:
+			N = N1
+		elif N1 is None:
+			N = N0
+		else: # Multiply 2 Gausians
+		# https://math.stackexchange.com/questions/157172/product-of-two-multivariate-gaussians-distributions
+			inv = np.linalg.inv(N0.cov + N1.cov)
+			cov = N0.cov.matmul(inv).matmul(N1.cov)
+			mu = (N1.cov.matmul(inv).matmul(N0.mean)) + (N0.cov.matmul(inv).matmul(N1.mean))
+			N = multivariate_normal(mean=mu,cov=cov)
+		return N
 
 
-	def __neg__(self):
-		return Gauss(c=list(map(lambda x: -x, self.numC)),
-					 mu=list(self.numMu),
-					 sigma=list(self.numSig),
-					 invc=list(self.denC),
-					 invmu=list(self.denMu),
-					 invsigma=list(self.denSig))
+	def evaluate(self,x):
+		x = np.array(x)
+		num = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.numC,self.numN)))
+		den = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.denC,self.denN)))
+		return num / den
 
 
-	def __sub__(self,other):
-		# self - other
-		if not isinstance(other,Gauss):
-			other = Gauss(c=other)
-		return self.__add__(other.__neg__())
-
-	def __rsub__(self,other):
-		# other - self
-		if not isinstance(other,Gauss):
-			other = Gauss(c=other)
-		return other.__add__(self.copy().__neg__())
-
-	def copy(self):
-		return Gauss(c=list(self.numC),mu=list(self.numMu),sigma=list(self.numSig),
-					 invc=list(self.denC), invmu=list(self.denMu), invsigma=list(self.denSig))
+	def equal(self,N0,N1):
+		if N0 is None and N1 is None:
+			return True
+		elif N0 is None or N1 is None:
+			return False
+		else: 
+			return (np.all(N0.mean==N1.mean) and np.all(N0.cov==N1.cov))
 
 
-	def __eq__(self,other):
-		return (self.numC==other.numC and self.numMu==other.numMu and self.numSig==other.numSig) and \
-			   (self.denC==other.denC and self.denMu==other.denMu and self.denSig==other.denSig)
-
-
-	def __ne__(self,other):
-		return not self.__eq__(other)
+	def plot(self,lim=None):
+		# TODO: test 1d and 2d plots. add option to only plot certain dimensions.
+		if lim is None:
+			# Calculate limits
+			mus = np.concatenate(tuple([[N.mean] for N in filter(lambda N: N is not None, self.numN+self.denN)]), axis=0)
+			maxs = np.amax(mus,axis=0) + 1
+			mins = np.amin(mus,axis=0) - 1
+			s = np.amax(maxs-mins) / 2
+			mid = (maxs + mins) / 2
+			lim = [[mid[i]-1.2*s, mid[i]+1.2*s] for i in range(maxs.shape[0])]
+		if len(lim) == 3:
+			from mayavi import mlab
+			# Evaluate
+			xi,yi,zi = np.mgrid[lim[0][0]:lim[0][1]:50j, lim[1][0]:lim[1][1]:50j, lim[2][0]:lim[2][1]:50j]
+			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
+			density = self.evaluate(coords.T).reshape(xi.shape)
+			# Plot scatter with mayavi
+			mlab.figure('DensityPlot')
+			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
+			minval = 0
+			maxval = density.max()
+			mlab.pipeline.volume(grid, vmin=minval, vmax=minval + .5*(maxval-minval))
+			mlab.axes()
+			mlab.show()
+		elif len(lim) == 2:
+			from matplotlib import cm
+			import matplotlib.pyplot as plt
+			fig = plt.figure()
+			ax = fig.add_axes([0,0,1,1], projection='3d')
+			# Evaluate
+			xi,yi = np.mgrid[lim[0][0]:lim[0][1]:100j, lim[1][0]:lim[1][1]:100j]
+			coords = np.vstack([item.ravel() for item in [xi, yi]])
+			density = self.evaluate(coords).reshape(xi.shape)
+			# Plot surface with matplotlib
+			surf = ax.plot_surface(xi, yi, density, cmap=cm.coolwarm, linewidth=0, antialiased=False, rcount=100, ccount=100)
+			ax.view_init(90, -90)
+			plt.xlabel("$x_1$")
+			plt.ylabel("$x_2$")
+			fig.colorbar(surf, shrink=0.2, aspect=5)
+			plt.show()
+		elif len(lim) == 1:
+			import matplotlib.pyplot as plt
+			fig = plt.figure()
+			# Evaluate
+			xi = np.mgrid[lim[0][0]:lim[0][1]:100j]
+			density = self.evaluate(np.array([xi])).reshape(xi.shape)
+			# Plot surface with matplotlib
+			plt.plot(xi, density)
+			plt.xlabel("$x$")
+			plt.show()
 
 
 	def __getitem__(self,x):
 		return self.evaluate(x)
 
+	def __eq__(self,other):
+		if not isinstance(other,GaussND):
+			return False
+		if len(other.numC) != len(self.numC) or len(other.denC) != len(self.denC):
+			return False
+		for i in range(len(self.numC)):
+			if self.numC[i] != other.numC[i] or not self.equal(self.numN[i],other.numN[i]):
+				return False
+		for i in range(len(self.denC)):
+			if self.denC[i] != other.denC[i] or not self.equal(self.denN[i],other.denN[i]):
+				return False
+		return True
 
-	def plot(self,ylim=None):
-		plot(self.evaluate(Gauss.x), ylim=ylim)
+	def __ne__(self,other):
+		return not self.__eq__(other)
 
+	def __neg__(self):
+		return GaussND(numC=list(map(lambda x: -x, self.numC)), numN=list(self.numN), denC=list(self.denC), denN=list(self.denN))
+
+	def __sub__(self,other):
+		# self - other
+		if not isinstance(other,GaussND):
+			other = GaussND(numC=other)
+		return self.__add__(other.__neg__())
+
+	def __rsub__(self,other):
+		# other - self
+		if not isinstance(other,GaussND):
+			other = GaussND(numC=other)
+		return other.__add__(self.copy().__neg__())
+
+	def __radd__(self,other):
+		return self.__add__(other)
+
+	def __rmul__(self,other):
+		return self.__mul__(other)
+
+	def __truediv__(self,other):
+		if not isinstance(other,GaussND):
+			other = GaussND(numC=other)
+		numC = list(other.numC)
+		numN = list(other.numN)
+		denC = list(other.denC)
+		denN = list(other.denN)
+		invother = GaussND(numC=denC,numN=denN,denC=numC,denN=numN)
+		return self.__mul__(invother)
+
+	def __rtruediv__(self,other):
+		if not isinstance(other,GaussND):
+			other = GaussND(numC=other)
+		numC = list(self.numC)
+		numN = list(self.numN)
+		denC = list(self.denC)
+		denN = list(self.denN)
+		invself = GaussND(numC=denC,numN=denN,denC=numC,denN=numN)
+		return invself.__mul__(other)
+
+		
+def gcd(nums):
+	return reduce(lambda x,y: math.gcd(x,y), nums)
+		
 
 
 if __name__ == '__main__':
-	# g1 = Gauss(mu=[0],sigma=[1])
-	# g2 = Gauss(mu=[1],sigma=[2])
-	# gratio = g2 / g1
-	init_printing()
+	# https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.stats.multivariate_normal.html
+	# https://docs.scipy.org/doc/scipy-0.18.1/reference/optimize.html
 
-	gadd = Gauss(mu=0,sigma=1) + Gauss(mu=3,sigma=1) + Gauss(mu=6,sigma=2)
-	x = Gauss.x
-	# print("Equation: ", pretty(gadd.evaluate(), use_unicode=True))
-	print("Min: ", gadd.min())
-	print("Min Approx", gadd.min(approx=True))
-	print("Min Checking", gadd.min(check=True))
+	mu0 = np.array([[0,0,0]]).T
+	cov0 = 0.2*np.identity(3)
+	g0 = GaussND(numN=(mu0,cov0))
+
+	mu1 = np.array([[1,0,0]]).T
+	cov1 = 0.1*np.array([[1,0,0],[0,1,0],[0,0,1]])
+	g1 = GaussND(numN=(mu1,cov1))
+
+	mu2 = np.array([[-0.5,0,0]]).T
+	cov2 = 0.1*np.identity(3)
+	g2 = 10*GaussND(numN=(mu2,cov2))
+
+	g3 = (g2 + g1) / g0
+	x = np.array([0,0,0])
+	#g3.plot()
 
 	import code; code.interact(local=locals())
+
+
+	

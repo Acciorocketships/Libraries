@@ -1,4 +1,4 @@
-from gaussnd import *
+from gauss import *
 import numpy as np
 from math import log
 

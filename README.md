@@ -4,17 +4,14 @@
 • Shows images <br>
 • Overlays masks onto images to visualize classification <br>
 
-# Kalman Filter
-• A general-purpose Kalman Filter class <br>
-• Auto-fills values that are not specified <br>
-• Combines readings from different sensors <br>
-• If no dt is specified, it times iterations of the loop, and recalculates parameters with that dt <br>
-
 # Network
 • Easy P2P network communication <br>
-• Just create the object using node=Network(port,host), then send by using node.send(data,port=otherport,host=otherhost) <br>
+• node0 = Client(name='node0',port=8000); node0.send(data, 'node1') <br>
+• Connects to a server node to get a list of peers, but it is possible to communicate without a server if the ip of a peer is already known. <br>
 
-# Gauss / GaussND
+# Gauss / Regression
 • Implements regression functions in continuous space with gaussians <br>
 • Can be added and multiplied with each other and with constants <br>
 • Contains function to find local minimum for optimization tasks <br>
+• Contains plotting tool <br>
+• Uses SVM from scikit-learn to fit a model to data and return the analytical equation <br>
