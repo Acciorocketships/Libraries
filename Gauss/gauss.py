@@ -7,18 +7,21 @@ from sklearn.svm import SVR
 
 class GaussND:
 
-	def __init__(self,numN=[None],numC=[1],denN=[None],denC=[1]):
+	def __init__(self,numN=[None],numC=[1],denN=[None],denC=[1],dim=None):
 		# N is a list of tuples (mu, cov)
 		self.numC = numC if isinstance(numC,list) else [numC]
 		self.numN = numN if isinstance(numN,list) else [numN]
 		self.denC = denC if isinstance(denC,list) else [denC]
 		self.denN = denN if isinstance(denN,list) else [denN]
+		self.dim = dim
 		for i, term in enumerate(self.numN):
 			if term is not None and not isinstance(term,_multivariate.multivariate_normal_frozen):
 				self.numN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
+				self.dim = len(term[0])
 		for i, term in enumerate(self.denN):
 			if term is not None and not isinstance(term,_multivariate.multivariate_normal_frozen):
 				self.denN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
+				self.dim = len(term[0])
 
 
 	def min(self,x0=None,eqcons=[],ieqcons=[],maximize=False):
@@ -34,7 +37,7 @@ class GaussND:
 			x0 = np.zeros((dim,))
 		# TODO: If there is only one gaussian, return mu
 		# TODO: If there are zero gaussians, return x0
-		f = (lambda x: -self.evaluate(x)) if maximize else self.evaluate
+		f = (lambda x: -self.eval(x)) if maximize else self.eval
 		if len(eqcons) != 0 or len(ieqcons) != 0:
 			xopt = fmin_slsqp(f,x0,eqcons=eqcons,ieqcons=ieqcons,iprint=0)
 		else:
@@ -61,6 +64,10 @@ class GaussND:
 	def __mul__(self,other):
 		if not isinstance(other,GaussND):
 			other = GaussND(numC=other)
+		if self.dim is not None:
+			dim = self.dim
+		elif other.dim is not None:
+			dim = other.dim
 		# (a / b) * (c / d) = ac / bd
 		numN, numC = self.multiplyPoly(self.numN,other.numN,self.numC,other.numC)
 		denN, denC = self.multiplyPoly(self.denN,other.denN,self.denC,other.denC)
@@ -68,12 +75,16 @@ class GaussND:
 		factor = min(denC)
 		numC = list(map(lambda x: x / factor, numC))
 		denC = list(map(lambda x: x / factor, denC))
-		return GaussND(numC=numC,numN=numN,denC=denC,denN=denN)
+		return GaussND(numC=numC,numN=numN,denC=denC,denN=denN,dim=dim)
 
 
 	def __add__(self,other):
 		if not isinstance(other,GaussND):
 			other = GaussND(numC=other)
+		if self.dim is not None:
+			dim = self.dim
+		elif other.dim is not None:
+			dim = other.dim
 		# a/b + c/d = (ad + bc) / (bd), where a/b is self and c/d is other
 		numN0, numC0 = self.multiplyPoly(self.numN,other.denN,self.numC,other.denC)
 		numN1, numC1 = self.multiplyPoly(self.denN,other.numN,self.denC,other.numC)
@@ -83,7 +94,7 @@ class GaussND:
 		numC0 = list(map(lambda x: x / factor, numC0))
 		numC1 = list(map(lambda x: x / factor, numC1))
 		denC = list(map(lambda x: x / factor, denC))
-		return GaussND(numC=numC0+numC1,numN=numN0+numN1,denC=denC,denN=denN)
+		return GaussND(numC=numC0+numC1,numN=numN0+numN1,denC=denC,denN=denN,dim=dim)
 
 
 	def multiplyPoly(self,N0,N1,C0=None,C1=None):
@@ -119,11 +130,23 @@ class GaussND:
 		return N
 
 
-	def evaluate(self,x):
-		x = np.array(x)
-		num = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.numC,self.numN)))
-		den = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.denC,self.denN)))
-		return num / den
+	def eval(self,x=None):
+		# x is either shape (dim,) or (nsamples,dim)
+		if x is not None:
+			x = np.array(x)
+			num = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.numC,self.numN)))
+			den = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.denC,self.denN)))
+			return num / den
+		else:
+			import sympy
+			from sympy import Matrix, MatrixSymbol, init_printing
+			from sympy.stats import density, Normal
+			init_printing()
+			x = Matrix(MatrixSymbol('x',self.dim,1))
+			num = sum(map(lambda term: term[0]*density(Normal("N",Matrix(term[1].mean),Matrix(term[1].cov)))(x) if term[1] is not None else term[0], zip(self.numC,self.numN)))
+			den = sum(map(lambda term: term[0]*density(Normal("N",Matrix(term[1].mean),Matrix(term[1].cov)))(x) if term[1] is not None else term[0], zip(self.denC,self.denN)))
+			func = num / den
+			return (func, x)
 
 
 	def equal(self,N0,N1):
@@ -150,7 +173,7 @@ class GaussND:
 			# Evaluate
 			xi,yi,zi = np.mgrid[lim[0][0]:lim[0][1]:50j, lim[1][0]:lim[1][1]:50j, lim[2][0]:lim[2][1]:50j]
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
-			density = self.evaluate(coords.T).reshape(xi.shape)
+			density = self.eval(coords.T).reshape(xi.shape)
 			# Plot scatter with mayavi
 			mlab.figure('DensityPlot')
 			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
@@ -162,12 +185,13 @@ class GaussND:
 		elif len(lim) == 2:
 			from matplotlib import cm
 			import matplotlib.pyplot as plt
+			from mpl_toolkits.mplot3d import Axes3D
 			fig = plt.figure()
 			ax = fig.add_axes([0,0,1,1], projection='3d')
 			# Evaluate
 			xi,yi = np.mgrid[lim[0][0]:lim[0][1]:100j, lim[1][0]:lim[1][1]:100j]
 			coords = np.vstack([item.ravel() for item in [xi, yi]])
-			density = self.evaluate(coords).reshape(xi.shape)
+			density = self.eval(coords.T).reshape(xi.shape)
 			# Plot surface with matplotlib
 			surf = ax.plot_surface(xi, yi, density, cmap=cm.coolwarm, linewidth=0, antialiased=False, rcount=100, ccount=100)
 			ax.view_init(90, -90)
@@ -180,7 +204,7 @@ class GaussND:
 			fig = plt.figure()
 			# Evaluate
 			xi = np.mgrid[lim[0][0]:lim[0][1]:100j]
-			density = self.evaluate(np.array([xi])).reshape(xi.shape)
+			density = self.eval(np.array([xi])).reshape(xi.shape)
 			# Plot surface with matplotlib
 			plt.plot(xi, density)
 			plt.xlabel("$x$")
@@ -188,7 +212,7 @@ class GaussND:
 
 
 	def __getitem__(self,x):
-		return self.evaluate(x)
+		return self.eval(x)
 
 	def __eq__(self,other):
 		if not isinstance(other,GaussND):
@@ -247,6 +271,10 @@ class GaussND:
 		invself = GaussND(numC=denC,numN=denN,denC=numC,denN=numN)
 		return invself.__mul__(other)
 
+
+	def __hash__(self):
+		return hash(tuple(self.numN))+hash(tuple(self.numC))+hash(tuple(self.denN))+hash(tuple(self.denC))
+
 		
 def gcd(nums):
 	return reduce(lambda x,y: math.gcd(x,y), nums)
@@ -257,23 +285,22 @@ if __name__ == '__main__':
 	# https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.stats.multivariate_normal.html
 	# https://docs.scipy.org/doc/scipy-0.18.1/reference/optimize.html
 
-	mu0 = np.array([[0,0,0]]).T
-	cov0 = 0.2*np.identity(3)
-	g0 = GaussND(numN=(mu0,cov0))
+	mu0 = [0,0]
+	cov0 = (0.8**2)*np.identity(2)
+	g0 = 50*GaussND(numN=(mu0,cov0))
 
-	mu1 = np.array([[1,0,0]]).T
-	cov1 = 0.1*np.array([[1,0,0],[0,1,0],[0,0,1]])
+	mu1 = [1,0]
+	cov1 = (0.1**2)*np.array([[2,1],[1,1]])
 	g1 = GaussND(numN=(mu1,cov1))
 
-	mu2 = np.array([[-0.5,0,0]]).T
-	cov2 = 0.1*np.identity(3)
-	g2 = 10*GaussND(numN=(mu2,cov2))
+	mu2 = [0,1.5]
+	cov2 = (0.3**2)*np.identity(2)
+	g2 = 8*GaussND(numN=(mu2,cov2))
 
-	g3 = (g2 + g1) / g0
-	x = np.array([0,0,0])
-	#g3.plot()
+	g3 = g2 + g1 + g0
+	g3.plot()
 
-	import code; code.interact(local=locals())
+	#import code; code.interact(local=locals())
 
 
 	

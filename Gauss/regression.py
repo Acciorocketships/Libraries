@@ -1,19 +1,80 @@
 from gauss import *
 import numpy as np
-from math import log
+from rtree import index as kdtree
 
 class Regressor:
 
 	def __init__(self):
-		self.restop = 100
-		self.resstep = 0.1
-		self.levels = 5
-		self.map = {}
-		self.dim = 3
-		self.offset = 0
+		#https://rtree.readthedocs.io/en/latest/tutorial.html#insert-records-into-the-index
+		self.init = False
+		self.dim = None
+		self.index = None
 
-	# TODO: add fit(x,y) command that uses svm with rbf kernel to find gaussians
-	# https://stackoverflow.com/questions/31300131/extracting-coefficients-with-a-nonlinear-kernel-using-sklearn-svm-python
+
+	def initialise(self, dim):
+		if not self.init:
+			self.dim = dim
+			prop = kdtree.Property()
+			prop.dimension = dim
+			self.index = kdtree.Index(interleaved=False, properties=prop)
+			self.init = True
+
+
+	def set(self,pos,val,radius=1):
+		self.initialise(len(pos))
+		if isinstance(radius,np.ndarray):
+			cov = radius
+		else:
+			cov = (radius**2) * np.eye(self.dim)
+		gaussian = GaussND(numN=(pos,cov))
+		currval = self.eval(pos)
+		gaussval = gaussian[pos]
+		C = (currval-val) / gaussval
+		gaussian = C * gaussian
+		self.addg(gaussian)
+
+
+	def add(self,pos,val,radius=1):
+		self.initialise(len(pos))
+		if isinstance(radius,np.ndarray):
+			cov = radius
+		else:
+			cov = (radius**2) * np.eye(self.dim)
+		gaussian = GaussND(numN=(pos,cov), numC=val)
+		gaussval = gaussian[pos]
+		C = val / gaussval
+		gaussian = C * gaussian
+		self.addg(gaussian)
+			
+
+	def addg(self,gaussian):
+		self.initialise(gaussian.dim)
+		bounds = self.get_bounding_box(gaussian, astuple=True)
+		uid = hash(gaussian)
+		self.index.insert(uid, bounds, obj=gaussian)
+
+
+	def eval(self, pos=None):
+		# x is either shape (dim,) or (nsamples,dim)
+		if pos is None:
+			eqn = self.equation()
+			return eqn.eval()
+		if isinstance(pos,np.ndarray) and len(pos.shape)>1 and pos.shape[0]>1:
+			return np.array([self.eval(pos[i,:]) for i in range(pos.shape[0])])
+		box = [pos[i//2] for i in range(2*len(pos))]
+		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
+		return sum(map(lambda g: g[pos], nearby_gaussians))
+
+
+	def equation(self, pos=None):
+		# get the analytical equation (as a gaussian) in the vicinity of pos. if pos is None, then it returns the global equation
+		if pos is None:
+			box = [-np.inf if i%2==0 else np.inf for i in range(2*self.dim)]
+		else:
+			box = [pos[i//2] for i in range(2*len(pos))]
+		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
+		return (sum(nearby_gaussians) if len(nearby_gaussians)!=0 else lambda x: 0)
+
 
 	def min(self,x0=None,eqcons=[],ieqcons=[]):
 		return self.equation(x0).min(x0=x0,eqcons=eqcons,ieqcons=ieqcons)
@@ -21,51 +82,6 @@ class Regressor:
 
 	def max(self,x0=None,eqcons=[],ieqcons=[]):
 		return self.equation(x0).max(x0=x0,eqcons=eqcons,ieqcons=ieqcons)
-
-
-	def set(self,pos,val,radius=1):
-		pos = np.array(pos)
-		self.dim = pos.size
-		currval = self.eval(pos)
-		cov = radius * np.eye(pos.size)
-		gaussian = GaussND(numN=(pos,cov))
-		newval = gaussian[pos]
-		gaussian *= (val-currval) / newval
-		self.add(gaussian)
-
-
-	def add(self,pos,val,radius=1):
-		pos = np.array(pos)
-		self.dim = pos.size
-		cov = radius * np.eye(pos.size)
-		gaussian = GaussND(numN=(pos,cov))
-		newval = gaussian[pos]
-		gaussian *= val / newval
-		self.addg(gaussian)
-			
-
-	def addg(self,gaussian):
-		if gaussian.numN[0] is None:
-			self.offset += gaussian.numC[0]
-			return
-		self.dim = gaussian.numN[0].mean.shape[0]
-		pos = gaussian.numN[0].mean
-		radius = gaussian.numN[0].cov[0][0]
-		deepestlevel = min(round(log(1/radius * self.restop) / log(1/self.resstep))-1, self.levels-1)
-		# Go to the largest level at which the gaussian spills into surrounding boxes
-		curr = self.map
-		for level in range(0,deepestlevel):
-			key = self.tohash(self.discretize(pos, self.stepsize(level)))
-			if key not in curr:
-				curr[key] = ([],{})
-			curr = curr[key][1]
-		# Add the gaussian to the middle and surrounding boxes
-		discpos = self.discretize(pos, self.stepsize(deepestlevel))
-		for corner in self.corners(discpos, self.stepsize(deepestlevel)):
-			key = self.tohash(corner)
-			if key not in curr:
-				curr[key] = ([],{})
-			curr[key][0].append(gaussian)
 
 
 	def fit(self, x, y, gamma='scale', C=1.0):
@@ -82,87 +98,20 @@ class Regressor:
 			self.addg(gaussian)
 
 
-	def eval(self,pos):
-		if not isinstance(pos,np.ndarray):
-			pos = np.array(pos)
-		if len(pos.shape) == 2:
-			outputs = []
-			for i in range(pos.shape[1]):
-				outputs.append(self.eval(pos[:,i]))
-			outputs = np.array(outputs)
-			return outputs
-		gaussians = []
-		curr = self.map
-		for level in range(0,self.levels):
-			key = self.tohash(self.discretize(pos, self.stepsize(level)))
-			if key not in curr:
-				break
-			gaussians = gaussians + curr[key][0]
-			curr = curr[key][1]
-		return sum(list(map(lambda f: f[pos], gaussians))) + self.offset
-
-
-	def equation(self, pos):
-		# TODO: get analytical solution for the entire area if pos is not given
-		pos = np.array(pos)
-		eqn = 0
-		curr = self.map
-		for level in range(0,self.levels):
-			key = self.tohash(self.discretize(pos, self.stepsize(level)))
-			if key not in curr:
-				break
-			for term in curr[key][0]:
-				eqn += term
-			curr = curr[key][1]
-		eqn += self.offset
-		return eqn
-
-
-	# Finds the corners that circumscribe a position at a given level
-	# Given a corner, this will return the centers of the adjacent cells
-	def corners(self,middle,h):
-		return self.cornershelper(middle, h, 0)
-	def cornershelper(self,pos,h,i):
-		if i == len(pos):
-			return [pos]
-		pos0 = pos.copy()
-		pos1 = pos.copy()
-		pos2 = pos.copy()
-		pos1[i] += h
-		pos2[i] -= h
-		return self.cornershelper(pos0, h, i+1) + self.cornershelper(pos1, h, i+1) + self.cornershelper(pos2, h, i+1)
-
-
-	def stepsize(self,level):
-		return self.restop * (self.resstep ** level)
-
-
-	def discretize(self,val,step):
-		if isinstance(val,np.ndarray):
-			val = np.round(val / step) * step
-		else:
-			val = round(val / step) * step
-		return val
-
-
-	def tohash(self,val):
-		if isinstance(val,np.ndarray):
-			return tuple(np.reshape(val,(-1,)))
-		else:
-			return val
-
-
 	def __getitem__(self,pos):
 		return self.eval(pos)
 
 
-	def __add__(self,term):	
-		pos = term[0]
-		val = term[1]
-		if len(term) > 2:
-			self.add(pos,val,radius=term[2])
+	def __add__(self,term):
+		if isinstance(term,tuple):
+			pos = term[0]
+			val = term[1]
+			if len(term) == 3:
+				self.add(pos,val,radius=term[2])
+			else:
+				self.add(pos,val)
 		else:
-			self.add(pos,val)
+			self.addg(term)
 		return self
 
 
@@ -170,18 +119,18 @@ class Regressor:
 		return self.__add__(term)
 
 
-	def __mul__(self,term):	
-		pos = term[0]
-		val = term[1]
-		if len(term) > 2:
-			self.set(pos,val,radius=term[2])
+	def get_bounding_box(self, gaussian, astuple=False):
+		nsigma = 4
+		cov = gaussian.numN[0].cov
+		mu = gaussian.numN[0].mean
+		eigvals, eigvecs = np.linalg.eig(cov)
+		axes = eigvecs @ np.diag(np.sqrt(eigvals * nsigma))
+		extents = np.amax(np.abs(axes), axis=1)
+		bounds = np.concatenate((np.reshape(mu-extents,(3,1)),np.reshape(mu+extents,(3,1))), axis=1)
+		if not astuple:
+			return bounds
 		else:
-			self.set(pos,val)
-		return self
-
-
-	def __rmul__(self,term):
-		return self.__mul__(term)
+			return tuple(np.reshape(bounds,(-1,)))
 
 
 	def plot(self,lim=[[-5,5],[-5,5],[-5,5]]):
@@ -192,7 +141,7 @@ class Regressor:
 			# Evaluate
 			xi,yi,zi = np.mgrid[lim[0][0]:lim[0][1]:50j, lim[1][0]:lim[1][1]:50j, lim[2][0]:lim[2][1]:50j]
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
-			density = self.eval(coords).reshape(xi.shape)
+			density = self.eval(coords.T).reshape(xi.shape)
 			# Plot scatter with mayavi
 			mlab.figure('DensityPlot',fgcolor=(0.0,0.0,0.0),bgcolor=(0.85,0.85,0.85),size=(600, 480))
 			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
@@ -210,7 +159,7 @@ class Regressor:
 			# Evaluate
 			xi,yi = np.mgrid[lim[0][0]:lim[0][1]:100j, lim[1][0]:lim[1][1]:100j]
 			coords = np.vstack([item.ravel() for item in [xi, yi]])
-			density = self.eval(coords).reshape(xi.shape)
+			density = self.eval(coords.T).reshape(xi.shape)
 			# Plot surface with matplotlib
 			surf = ax.plot_surface(xi, yi, density, cmap=cm.coolwarm, linewidth=0, antialiased=False, rcount=100, ccount=100, alpha=0.7)
 			ax.contour(xi, yi, density, linewidth=5)
@@ -242,15 +191,16 @@ def test_fit():
 def test_add():
 	r = Regressor()
 	r += ([2,2,-1],1,1)           # x, f(x), radius
-	r += ([-3,0,1],-2,0.5)		 # x, f(x), radius (negative will not be displayed on plot)
-	r += ([-2,1,2],1,0.5)		 # x, f(x), radius
+	r += ([-3,0,1],-2,2)		 # x, f(x), radius (negative will not be displayed on plot)
+	r += ([0.1,-0.2,0],1,0.5)
 	eq = r.equation([0,0,0])	 # analytical equation in the vicinity of [0,0,0]
 	xopt = r.min([0,0,0])
 	print("argmin(r) = ", xopt)			# Sure engouh, xopt = [-3,0,0], the location where we set the function to -2
 	print("min(r) = ", eq[xopt])        # The analytical equation can be evaluated
 	print("r([0,0,0]) = ", r[[0,0,0]])  # Or the regressor can be evaluated directly
-	r.plot()	
+	f, x = r.eval()
+	import code; code.interact(local=locals())
 
 
 if __name__ == '__main__':
-	test_fit()
+	test_add()
