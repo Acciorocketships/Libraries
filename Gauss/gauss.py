@@ -5,7 +5,7 @@ import numpy as np
 import math
 from sklearn.svm import SVR
 
-class GaussND:
+class Gauss:
 
 	def __init__(self,numN=[None],numC=[1],denN=[None],denC=[1],dim=None):
 		# N is a list of tuples (mu, cov)
@@ -14,6 +14,9 @@ class GaussND:
 		self.denC = denC if isinstance(denC,list) else [denC]
 		self.denN = denN if isinstance(denN,list) else [denN]
 		self.dim = dim
+		self.mu = None
+		self.cov = None
+		self.invcov = None
 		for i, term in enumerate(self.numN):
 			if term is not None and not isinstance(term,_multivariate.multivariate_normal_frozen):
 				self.numN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
@@ -22,6 +25,10 @@ class GaussND:
 			if term is not None and not isinstance(term,_multivariate.multivariate_normal_frozen):
 				self.denN[i] = multivariate_normal(mean=np.reshape(term[0],(-1,)),cov=term[1])
 				self.dim = len(term[0])
+		self.single_gaussian = (len(self.numN)==1) and (self.numN[0] is not None) and (len(self.denN)==1) and (self.denN[0] is None)
+		if self.single_gaussian:
+			self.mu = self.numN[0].mean
+			self.cov = self.numN[0].cov
 
 
 	def min(self,x0=None,eqcons=[],ieqcons=[],maximize=False):
@@ -62,8 +69,8 @@ class GaussND:
 
 
 	def __mul__(self,other):
-		if not isinstance(other,GaussND):
-			other = GaussND(numC=other)
+		if not isinstance(other,Gauss):
+			other = Gauss(numC=other)
 		if self.dim is not None:
 			dim = self.dim
 		elif other.dim is not None:
@@ -75,12 +82,12 @@ class GaussND:
 		factor = min(denC)
 		numC = list(map(lambda x: x / factor, numC))
 		denC = list(map(lambda x: x / factor, denC))
-		return GaussND(numC=numC,numN=numN,denC=denC,denN=denN,dim=dim)
+		return Gauss(numC=numC,numN=numN,denC=denC,denN=denN,dim=dim)
 
 
 	def __add__(self,other):
-		if not isinstance(other,GaussND):
-			other = GaussND(numC=other)
+		if not isinstance(other,Gauss):
+			other = Gauss(numC=other)
 		if self.dim is not None:
 			dim = self.dim
 		elif other.dim is not None:
@@ -94,7 +101,7 @@ class GaussND:
 		numC0 = list(map(lambda x: x / factor, numC0))
 		numC1 = list(map(lambda x: x / factor, numC1))
 		denC = list(map(lambda x: x / factor, denC))
-		return GaussND(numC=numC0+numC1,numN=numN0+numN1,denC=denC,denN=denN,dim=dim)
+		return Gauss(numC=numC0+numC1,numN=numN0+numN1,denC=denC,denN=denN,dim=dim)
 
 
 	def multiplyPoly(self,N0,N1,C0=None,C1=None):
@@ -138,15 +145,37 @@ class GaussND:
 			den = sum(map(lambda term: term[0]*term[1].pdf(x) if term[1] is not None else term[0], zip(self.denC,self.denN)))
 			return num / den
 		else:
-			import sympy
-			from sympy import Matrix, MatrixSymbol, init_printing
+			from sympy import Matrix, MatrixSymbol
 			from sympy.stats import density, Normal
-			init_printing()
 			x = Matrix(MatrixSymbol('x',self.dim,1))
 			num = sum(map(lambda term: term[0]*density(Normal("N",Matrix(term[1].mean),Matrix(term[1].cov)))(x) if term[1] is not None else term[0], zip(self.numC,self.numN)))
 			den = sum(map(lambda term: term[0]*density(Normal("N",Matrix(term[1].mean),Matrix(term[1].cov)))(x) if term[1] is not None else term[0], zip(self.denC,self.denN)))
 			func = num / den
 			return (func, x)
+
+
+	def grad(self,x=None):
+		if x is not None:
+			x = x.reshape((-1,))
+			if self.single_gaussian:
+				if self.invcov is None:
+					self.invcov = np.linalg.inv(self.cov)
+				return -self.eval(x) * (self.invcov @ (x - self.mu))
+			else:
+				dt = 1E-6
+				return np.array([(self.eval(x+self.grad_helper(i,dt/2))-self.eval(x-self.grad_helper(i,dt/2))) / dt for i in range(self.dim)])
+		else:
+			from sympy import diff
+			f, x = self.eval()
+			return (diff(f,x), x)
+
+
+
+	def grad_helper(self,i,dx):
+		# creates a vector of length self.dim with dx in the ith position
+		x = np.zeros((self.dim,))
+		x[i] = dx
+		return x
 
 
 	def equal(self,N0,N1):
@@ -215,7 +244,7 @@ class GaussND:
 		return self.eval(x)
 
 	def __eq__(self,other):
-		if not isinstance(other,GaussND):
+		if not isinstance(other,Gauss):
 			return False
 		if len(other.numC) != len(self.numC) or len(other.denC) != len(self.denC):
 			return False
@@ -231,18 +260,18 @@ class GaussND:
 		return not self.__eq__(other)
 
 	def __neg__(self):
-		return GaussND(numC=list(map(lambda x: -x, self.numC)), numN=list(self.numN), denC=list(self.denC), denN=list(self.denN))
+		return Gauss(numC=list(map(lambda x: -x, self.numC)), numN=list(self.numN), denC=list(self.denC), denN=list(self.denN))
 
 	def __sub__(self,other):
 		# self - other
-		if not isinstance(other,GaussND):
-			other = GaussND(numC=other)
+		if not isinstance(other,Gauss):
+			other = Gauss(numC=other)
 		return self.__add__(other.__neg__())
 
 	def __rsub__(self,other):
 		# other - self
-		if not isinstance(other,GaussND):
-			other = GaussND(numC=other)
+		if not isinstance(other,Gauss):
+			other = Gauss(numC=other)
 		return other.__add__(self.copy().__neg__())
 
 	def __radd__(self,other):
@@ -252,23 +281,23 @@ class GaussND:
 		return self.__mul__(other)
 
 	def __truediv__(self,other):
-		if not isinstance(other,GaussND):
-			other = GaussND(numC=other)
+		if not isinstance(other,Gauss):
+			other = Gauss(numC=other)
 		numC = list(other.numC)
 		numN = list(other.numN)
 		denC = list(other.denC)
 		denN = list(other.denN)
-		invother = GaussND(numC=denC,numN=denN,denC=numC,denN=numN)
+		invother = Gauss(numC=denC,numN=denN,denC=numC,denN=numN)
 		return self.__mul__(invother)
 
 	def __rtruediv__(self,other):
-		if not isinstance(other,GaussND):
-			other = GaussND(numC=other)
+		if not isinstance(other,Gauss):
+			other = Gauss(numC=other)
 		numC = list(self.numC)
 		numN = list(self.numN)
 		denC = list(self.denC)
 		denN = list(self.denN)
-		invself = GaussND(numC=denC,numN=denN,denC=numC,denN=numN)
+		invself = Gauss(numC=denC,numN=denN,denC=numC,denN=numN)
 		return invself.__mul__(other)
 
 
@@ -287,15 +316,15 @@ if __name__ == '__main__':
 
 	mu0 = [0,0]
 	cov0 = (0.8**2)*np.identity(2)
-	g0 = 50*GaussND(numN=(mu0,cov0))
+	g0 = 50*Gauss(numN=(mu0,cov0))
 
 	mu1 = [1,0]
 	cov1 = (0.1**2)*np.array([[2,1],[1,1]])
-	g1 = GaussND(numN=(mu1,cov1))
+	g1 = Gauss(numN=(mu1,cov1))
 
 	mu2 = [0,1.5]
 	cov2 = (0.3**2)*np.identity(2)
-	g2 = 8*GaussND(numN=(mu2,cov2))
+	g2 = 8*Gauss(numN=(mu2,cov2))
 
 	g3 = g2 + g1 + g0
 	g3.plot()

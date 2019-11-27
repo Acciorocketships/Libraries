@@ -26,7 +26,7 @@ class Regressor:
 			cov = radius
 		else:
 			cov = (radius**2) * np.eye(self.dim)
-		gaussian = GaussND(numN=(pos,cov))
+		gaussian = Gauss(numN=(pos,cov))
 		currval = self.eval(pos)
 		gaussval = gaussian[pos]
 		C = (currval-val) / gaussval
@@ -40,7 +40,7 @@ class Regressor:
 			cov = radius
 		else:
 			cov = (radius**2) * np.eye(self.dim)
-		gaussian = GaussND(numN=(pos,cov), numC=val)
+		gaussian = Gauss(numN=(pos,cov), numC=val)
 		gaussval = gaussian[pos]
 		C = val / gaussval
 		gaussian = C * gaussian
@@ -64,6 +64,17 @@ class Regressor:
 		box = [pos[i//2] for i in range(2*len(pos))]
 		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
 		return sum(map(lambda g: g[pos], nearby_gaussians))
+
+	def grad(self, pos=None):
+		# x is either shape (dim,) or (nsamples,dim)
+		if pos is None:
+			eqn = self.equation()
+			return eqn.eval()
+		if isinstance(pos,np.ndarray) and len(pos.shape)>1 and pos.shape[0]>1:
+			return np.array([self.eval(pos[i,:]) for i in range(pos.shape[0])])
+		box = [pos[i//2] for i in range(2*len(pos))]
+		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
+		return sum(map(lambda g: g.grad(pos), nearby_gaussians))
 
 
 	def equation(self, pos=None):
@@ -94,7 +105,7 @@ class Regressor:
 		numC.append(np.asscalar(model.intercept_))
 		numN.append(None)
 		for i in range(len(numC)):
-			gaussian = GaussND(numC=numC[i],numN=numN[i])
+			gaussian = Gauss(numC=numC[i],numN=numN[i])
 			self.addg(gaussian)
 
 
@@ -121,12 +132,12 @@ class Regressor:
 
 	def get_bounding_box(self, gaussian, astuple=False):
 		nsigma = 4
-		cov = gaussian.numN[0].cov
-		mu = gaussian.numN[0].mean
+		cov = gaussian.cov
+		mu = gaussian.mu
 		eigvals, eigvecs = np.linalg.eig(cov)
-		axes = eigvecs @ np.diag(np.sqrt(eigvals * nsigma))
+		axes = eigvecs @ np.diag(np.sqrt(eigvals) * nsigma)
 		extents = np.amax(np.abs(axes), axis=1)
-		bounds = np.concatenate((np.reshape(mu-extents,(3,1)),np.reshape(mu+extents,(3,1))), axis=1)
+		bounds = np.concatenate((np.reshape(mu-extents,(self.dim,1)),np.reshape(mu+extents,(self.dim,1))), axis=1)
 		if not astuple:
 			return bounds
 		else:
@@ -178,29 +189,3 @@ class Regressor:
 			plt.plot(xi, density)
 			plt.xlabel("$x$")
 			plt.show()
-
-
-def test_fit():
-	from sklearn.datasets.samples_generator import make_blobs
-	x, y = make_blobs(n_samples=50, centers=2, random_state=0, cluster_std=0.60)
-	r = Regressor()
-	r.fit(x,y)
-	r.plot()
-
-
-def test_add():
-	r = Regressor()
-	r += ([2,2,-1],1,1)           # x, f(x), radius
-	r += ([-3,0,1],-2,2)		 # x, f(x), radius (negative will not be displayed on plot)
-	r += ([0.1,-0.2,0],1,0.5)
-	eq = r.equation([0,0,0])	 # analytical equation in the vicinity of [0,0,0]
-	xopt = r.min([0,0,0])
-	print("argmin(r) = ", xopt)			# Sure engouh, xopt = [-3,0,0], the location where we set the function to -2
-	print("min(r) = ", eq[xopt])        # The analytical equation can be evaluated
-	print("r([0,0,0]) = ", r[[0,0,0]])  # Or the regressor can be evaluated directly
-	f, x = r.eval()
-	import code; code.interact(local=locals())
-
-
-if __name__ == '__main__':
-	test_add()
