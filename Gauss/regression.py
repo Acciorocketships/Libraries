@@ -59,9 +59,9 @@ class Regressor:
 		if pos is None:
 			eqn = self.equation()
 			return eqn.eval()
-		if isinstance(pos,np.ndarray) and len(pos.shape)>1 and pos.shape[0]>1:
+		if isinstance(pos,np.ndarray) and len(pos.shape)>1:
 			return np.array([self.eval(pos[i,:]) for i in range(pos.shape[0])])
-		box = [pos[i//2] for i in range(2*len(pos))]
+		box = [pos[i//2] for i in range(2*self.dim)]
 		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
 		return sum(map(lambda g: g[pos], nearby_gaussians))
 
@@ -69,12 +69,16 @@ class Regressor:
 		# x is either shape (dim,) or (nsamples,dim)
 		if pos is None:
 			eqn = self.equation()
-			return eqn.eval()
-		if isinstance(pos,np.ndarray) and len(pos.shape)>1 and pos.shape[0]>1:
-			return np.array([self.eval(pos[i,:]) for i in range(pos.shape[0])])
-		box = [pos[i//2] for i in range(2*len(pos))]
+			return eqn.grad()
+		if isinstance(pos,np.ndarray) and len(pos.shape)>1:
+			val = np.array([self.grad(pos[i,:]) for i in range(pos.shape[0])])
+			return val
+		box = [pos[i//2] for i in range(2*self.dim)]
 		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
-		return sum(map(lambda g: g.grad(pos), nearby_gaussians))
+		val = sum(map(lambda g: g.grad(pos), nearby_gaussians))
+		if isinstance(val,int) and val==0:
+			val = np.zeros((self.dim,))
+		return val
 
 
 	def equation(self, pos=None):
@@ -82,7 +86,7 @@ class Regressor:
 		if pos is None:
 			box = [-np.inf if i%2==0 else np.inf for i in range(2*self.dim)]
 		else:
-			box = [pos[i//2] for i in range(2*len(pos))]
+			box = [pos[i//2] for i in range(2*self.dim)]
 		nearby_gaussians = [g.object for g in self.index.intersection(box, objects=True)]
 		return (sum(nearby_gaussians) if len(nearby_gaussians)!=0 else lambda x: 0)
 
@@ -144,7 +148,7 @@ class Regressor:
 			return tuple(np.reshape(bounds,(-1,)))
 
 
-	def plot(self,lim=[[-5,5],[-5,5],[-5,5]]):
+	def plot(self,lim=[[-5,5],[-5,5],[-5,5]],pause=True):
 		if self.dim > 3:
 			print("Too many dimensions to plot")
 		elif self.dim == 3:
@@ -154,19 +158,20 @@ class Regressor:
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
 			density = self.eval(coords.T).reshape(xi.shape)
 			# Plot scatter with mayavi
-			mlab.figure('DensityPlot',fgcolor=(0.0,0.0,0.0),bgcolor=(0.85,0.85,0.85),size=(600, 480))
+			fig = mlab.figure('DensityPlot',fgcolor=(0.0,0.0,0.0),bgcolor=(0.85,0.85,0.85),size=(600, 480))
 			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
 			minval = 0
 			maxval = density.max()
 			mlab.pipeline.volume(grid, vmin=minval, vmax=minval + .5*(maxval-minval))
 			mlab.axes(xlabel="x1",ylabel="x2",zlabel="x3")
 			mlab.show()
+			return fig
 		elif self.dim == 2:
 			from matplotlib import cm
 			import matplotlib.pyplot as plt
 			from mpl_toolkits.mplot3d import Axes3D
 			fig = plt.figure()
-			ax = fig.add_axes([0,0,1,1], projection='3d')
+			ax = fig.add_axes([-0.3,-0.4,1.55,1.6], projection='3d')
 			# Evaluate
 			xi,yi = np.mgrid[lim[0][0]:lim[0][1]:100j, lim[1][0]:lim[1][1]:100j]
 			coords = np.vstack([item.ravel() for item in [xi, yi]])
@@ -177,8 +182,11 @@ class Regressor:
 			ax.view_init(90, -90)
 			plt.xlabel("$x_1$")
 			plt.ylabel("$x_2$")
-			fig.colorbar(surf, orientation='horizontal', pad=0.01, fraction=0.12, shrink=0.9, aspect=18)
+			fig.colorbar(surf, orientation='horizontal', pad=0.01, fraction=0.12, shrink=0.5, aspect=18)
+			if not pause:
+				plt.ion()
 			plt.show()
+			return ax
 		elif self.dim == 1:
 			import matplotlib.pyplot as plt
 			fig = plt.figure()
@@ -188,4 +196,7 @@ class Regressor:
 			# Plot surface with matplotlib
 			plt.plot(xi, density)
 			plt.xlabel("$x$")
+			if not pause:
+				plt.ion()
 			plt.show()
+			return ax

@@ -156,7 +156,7 @@ class Gauss:
 
 	def grad(self,x=None):
 		if x is not None:
-			x = x.reshape((-1,))
+			x = np.reshape(x,(-1,))
 			if self.single_gaussian:
 				if self.invcov is None:
 					self.invcov = np.linalg.inv(self.cov)
@@ -187,7 +187,7 @@ class Gauss:
 			return (np.all(N0.mean==N1.mean) and np.all(N0.cov==N1.cov))
 
 
-	def plot(self,lim=None):
+	def plot(self,lim=None,pause=True):
 		# TODO: test 1d and 2d plots. add option to only plot certain dimensions.
 		if lim is None:
 			# Calculate limits
@@ -204,13 +204,14 @@ class Gauss:
 			coords = np.vstack([item.ravel() for item in [xi, yi, zi]])
 			density = self.eval(coords.T).reshape(xi.shape)
 			# Plot scatter with mayavi
-			mlab.figure('DensityPlot')
+			fig = mlab.figure('DensityPlot')
 			grid = mlab.pipeline.scalar_field(xi, yi, zi, density)
 			minval = 0
 			maxval = density.max()
 			mlab.pipeline.volume(grid, vmin=minval, vmax=minval + .5*(maxval-minval))
 			mlab.axes()
 			mlab.show()
+			return fig
 		elif len(lim) == 2:
 			from matplotlib import cm
 			import matplotlib.pyplot as plt
@@ -227,7 +228,10 @@ class Gauss:
 			plt.xlabel("$x_1$")
 			plt.ylabel("$x_2$")
 			fig.colorbar(surf, shrink=0.2, aspect=5)
+			if not pause:
+				plt.ion()
 			plt.show()
+			return ax
 		elif len(lim) == 1:
 			import matplotlib.pyplot as plt
 			fig = plt.figure()
@@ -237,7 +241,10 @@ class Gauss:
 			# Plot surface with matplotlib
 			plt.plot(xi, density)
 			plt.xlabel("$x$")
+			if not pause:
+				plt.ion()
 			plt.show()
+			return ax
 
 
 	def __getitem__(self,x):
@@ -307,29 +314,6 @@ class Gauss:
 		
 def gcd(nums):
 	return reduce(lambda x,y: math.gcd(x,y), nums)
-		
-
-
-if __name__ == '__main__':
-	# https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.stats.multivariate_normal.html
-	# https://docs.scipy.org/doc/scipy-0.18.1/reference/optimize.html
-
-	mu0 = [0,0]
-	cov0 = (0.8**2)*np.identity(2)
-	g0 = 50*Gauss(numN=(mu0,cov0))
-
-	mu1 = [1,0]
-	cov1 = (0.1**2)*np.array([[2,1],[1,1]])
-	g1 = Gauss(numN=(mu1,cov1))
-
-	mu2 = [0,1.5]
-	cov2 = (0.3**2)*np.identity(2)
-	g2 = 8*Gauss(numN=(mu2,cov2))
-
-	g3 = g2 + g1 + g0
-	g3.plot()
-
-	#import code; code.interact(local=locals())
 
 
 	

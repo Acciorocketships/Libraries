@@ -30,7 +30,17 @@ def test_regressor_approx_and_min():
 	print("x0=%s, argmin=%s, r(%s)=%g" % (x0+vstep, min4, min4, r[min4]))
 	min5 = r.min(x0-vstep)
 	print("x0=%s, argmin=%s, r(%s)=%g" % (x0-vstep, min5, min5, r[min5]))
-	# Test plot
+
+def test_regressor_grad():
+	r = Regressor()
+	r += ([0,1], 1, 0.5)
+	r += ([1,0],-0.5, 0.75)
+	r += ([-2,2], -1, 1)
+	r += ([-0.8, -0.2], 2, 0.5)
+	r += ([-1,-1],-3, 0.25)
+	x = np.array([0.0,0.0])
+	print(r.grad(x))
+	print(r.grad(x.reshape((1,2))))
 	r.plot()
 
 def test_gradient():
@@ -67,7 +77,7 @@ def test_regressor_fit():
 	r.plot()
 
 
-def test_regressor_add():
+def test_regressor_min():
 	r = Regressor()
 	r += ([2,2,-1],1,1)           # x, f(x), radius
 	r += ([-3,0,1],-2,2)		 # x, f(x), radius (negative will not be displayed on plot)
@@ -99,4 +109,4 @@ def test_gauss():
 
 
 if __name__ == '__main__':
-	test_gradient_implementation()
+	test_regressor_grad()
